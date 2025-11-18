@@ -6,7 +6,7 @@ permissions:
 on:
   workflow_dispatch:
   schedule:
-    - cron: '*/30 * * * *'   # Every 30 mins (UTC)
+    - cron: '*/30 * * * *'
 
 jobs:
   update:
@@ -52,50 +52,63 @@ jobs:
               else []
               end;
 
-            # Normalize channel name for matching
+            # Clean & normalize name for matching & dedup
             def clean_name:
               (.name // .title // .channel_name // "") |
               ascii_downcase |
               gsub("\\s+"; " ") |
-              gsub("( hd| sd| •| \\(.*?\\)| \\[.*?\\])"; "") |
+              gsub("( hd| sd| •|:| - .*| \\(.*?\\)| \\[.*?\\]| hd$| sd$)"; "") |
               gsub("^\\s+|\\s+$"; "");
 
-            # Tamil channel matcher
+            # Strict Tamil channel list (case-insensitive exact/fuzzy match)
+            # Only include if name matches *and* does NOT contain Hindi/regional keywords
             def is_tamil_channel:
               clean_name as $n |
-              (
-                # Major Tamil GECs & News
-                $n | contains("sun tv") or contains("sun news") or contains("sun life") or
-                contains("star vijay") or contains("vijay super") or
-                test("zee.*tamil") or
-                test("colors.*tamil") or
-                contains("ktv") or
-                contains("zee thirai") or contains("thirai hd") or
-                contains("chutti") or
-                contains("kalaignar") or
-                contains("jaya plus") or contains("jaya tv") or
-                contains("raj tv") or
-                contains("polimer") or
-                contains("vasanth") or
-                contains("adithya") or
-                contains("j movies") or
-                # Tamil news (broad match)
-                ($n | test("news") and ($n | test("tamil|sun|kalaignar|jaya|raj|polimer"))) or
-                # Kids channels (as per your list)
-                contains("disney channel") or
-                contains("hungama") or
-                contains("disney junior") or
-                contains("sony yay") or
-                contains("cartoon network") or
-                contains("pogo") or
-                contains("nickelodeon") or
-                contains("sonic tv") or contains("sonic hd")
-              );
+              # First, exclude non-Tamil explicitly
+              if (
+                $n | test("hindi|gujarati|marathi|punjabi|bengali|odia|telugu|kannada|malayalam|rajasthan|news18|ndtv|aaj tak|zeenews|republic")
+              ) then false
+              else
+                # ✅ Approved Tamil channels (GEC, Movies, News, Music, Kids-with-Tamil)
+                $n | (
+                  # Major GECs
+                  contains("sun tv") or contains("star vijay") or contains("vijay super") or
+                  test("zee.*tamil") or test("colors.*tamil") or
+                  contains("ktv") or contains("polimer tv") or contains("kalaignar tv") or
+                  contains("vasanth tv") or contains("adithya tv") or contains("sun life") or
+
+                  # Movies
+                  contains("zee thirai") or contains("thirai") or contains("sun cinemas") or
+                  contains("j movies") or contains("jaya plus") or
+
+                  # News (only if "tamil" or known Tamil brand)
+                  (contains("sun news") and ($n | contains("tamil") or contains("sun"))) or
+                  (contains("news") and ($n | test("kalaignar|jaya|raj tv|polimer|than|thanthi"))) or
+
+                  # Music & Kids
+                  contains("sun music") or contains("chutti tv") or
+
+                  # Kids *with Tamil audio only* — must have "tamil" in name
+                  (contains("hungama") and contains("tamil")) or
+                  (contains("disney") and contains("tamil")) or
+                  (contains("pogo") and contains("tamil")) or
+                  (contains("cartoon network") and contains("tamil")) or
+                  (contains("sony yay") and contains("tamil"))
+                )
+              end;
 
             normalize |
             map(select(type == "object")) |
+            # Filter & deduplicate
+            map(
+              .clean_name = clean_name
+            ) |
+            map(select(.clean_name != "" and (.link // "") != "" and is_tamil_channel)) |
+            # Deduplicate by clean_name — keep first occurrence
+            group_by(.clean_name) |
+            map(.[0]) |
             .[] |
-            clean_name as $clean_name |
+
             (.name // .title // "Unknown") as $orig_name |
             (.tvg_id // .tvgId // .id // "") as $tvg_id |
             (.tvg_logo // .logo // .icon // "") as $tvg_logo |
@@ -103,9 +116,6 @@ jobs:
             (.drmLicense // .license // "") as $drmLicense |
             (.cookie // .cookies // "") as $cookie |
             (.link // .url // .stream_url // .hls // .mpd // "") as $link |
-
-            # Only include if Tamil & has link
-            if ($link | length > 0) and is_tamil_channel then
 
             "#EXTINF:-1 " +
               (if ($tvg_id | length > 0) then "tvg-id=\"\($tvg_id)\" " else "" end) +
@@ -132,21 +142,24 @@ jobs:
               ($cookie_line | select(. != "")),
               $link
             ] | join("\n")
-
-            else empty end
           ' >> tamil.m3u
 
-          # Final validation
+          # Validation
           LINE_COUNT=$(wc -l < tamil.m3u)
+          CHANNEL_COUNT=$(grep -c "^#EXTINF" tamil.m3u)
           if [ "$LINE_COUNT" -le 1 ]; then
-            echo "❌ tamil.m3u has only #EXTM3U ($LINE_COUNT lines)"
-            echo "🔍 No Tamil channels matched. Sample names:"
-            echo "$JSON" | jq -r 'normalize | .[0:5][] | .name // .title // "–"' 2>/dev/null | head -n 5
+            echo "❌ tamil.m3u empty or only #EXTM3U"
+            echo "🔍 First 10 normalized names in JSON (for debugging):"
+            echo "$JSON" | jq -r '
+              normalize |
+              map(select(type == "object")) |
+              .[0:10][] |
+              (.name // .title // "–") + " → " + ([clean_name] | @csv)
+            ' 2>/dev/null || echo "⚠️ jq debug failed"
             exit 1
           fi
 
-          CHANNEL_COUNT=$(grep -c "^#EXTINF" tamil.m3u)
-          echo "✅ tamil.m3u created: $CHANNEL_COUNT Tamil channels ($LINE_COUNT lines)"
+          echo "✅ tamil.m3u created: $CHANNEL_COUNT unique Tamil channels ($LINE_COUNT lines)"
           echo "📺 First channel:"
           awk '/^#EXTINF/,/^https?:/ { print; if (/^https?:/) exit }' tamil.m3u
 
