@@ -6,7 +6,7 @@ permissions:
 on:
   workflow_dispatch:
   schedule:
-    - cron: '*/30 * * * *'   # Every 30 minutes (UTC)
+    - cron: '*/30 * * * *'   # Every 30 mins (UTC)
 
 jobs:
   update:
@@ -32,15 +32,14 @@ jobs:
             "$JSON_URL") || { echo "❌ Failed to fetch JSON"; exit 1; }
 
           if [ -z "$JSON" ] || [ "${JSON:0:1}" = "<" ]; then
-            echo "❌ Response is empty or HTML (e.g., error page)"
-            echo "First 200 chars: $(echo "$JSON" | head -c 200)"
+            echo "❌ Response is empty or HTML"
             exit 1
           fi
 
-          # Start new tamil.m3u
           echo "#EXTM3U" > tamil.m3u
 
           echo "$JSON" | jq -r '
+            # Normalize structure
             def normalize:
               if type == "array" then .
               elif type == "object" then
@@ -53,10 +52,51 @@ jobs:
               else []
               end;
 
+            # Normalize channel name for matching
+            def clean_name:
+              (.name // .title // .channel_name // "") |
+              ascii_downcase |
+              gsub("\\s+"; " ") |
+              gsub("( hd| sd| •| \\(.*?\\)| \\[.*?\\])"; "") |
+              gsub("^\\s+|\\s+$"; "");
+
+            # Tamil channel matcher
+            def is_tamil_channel:
+              clean_name as $n |
+              (
+                # Major Tamil GECs & News
+                $n | contains("sun tv") or contains("sun news") or contains("sun life") or
+                contains("star vijay") or contains("vijay super") or
+                test("zee.*tamil") or
+                test("colors.*tamil") or
+                contains("ktv") or
+                contains("zee thirai") or contains("thirai hd") or
+                contains("chutti") or
+                contains("kalaignar") or
+                contains("jaya plus") or contains("jaya tv") or
+                contains("raj tv") or
+                contains("polimer") or
+                contains("vasanth") or
+                contains("adithya") or
+                contains("j movies") or
+                # Tamil news (broad match)
+                ($n | test("news") and ($n | test("tamil|sun|kalaignar|jaya|raj|polimer"))) or
+                # Kids channels (as per your list)
+                contains("disney channel") or
+                contains("hungama") or
+                contains("disney junior") or
+                contains("sony yay") or
+                contains("cartoon network") or
+                contains("pogo") or
+                contains("nickelodeon") or
+                contains("sonic tv") or contains("sonic hd")
+              );
+
             normalize |
             map(select(type == "object")) |
             .[] |
-            (.name // .title // .channel_name // "Unknown") as $name |
+            clean_name as $clean_name |
+            (.name // .title // "Unknown") as $orig_name |
             (.tvg_id // .tvgId // .id // "") as $tvg_id |
             (.tvg_logo // .logo // .icon // "") as $tvg_logo |
             (.drmScheme // .drm_scheme // .drm // "") as $drmScheme |
@@ -64,13 +104,14 @@ jobs:
             (.cookie // .cookies // "") as $cookie |
             (.link // .url // .stream_url // .hls // .mpd // "") as $link |
 
-            if ($link | length) == 0 then empty else
+            # Only include if Tamil & has link
+            if ($link | length > 0) and is_tamil_channel then
 
             "#EXTINF:-1 " +
               (if ($tvg_id | length > 0) then "tvg-id=\"\($tvg_id)\" " else "" end) +
-              "group-title=\"Tamil\" " +  # ✅ Updated group title to "Tamil"
+              "group-title=\"Tamil\" " +
               (if ($tvg_logo | length > 0) then "tvg-logo=\"\($tvg_logo)\" " else "" end) +
-              ",\($name | gsub(","; "\\,"))" |
+              ",\($orig_name | gsub(","; "\\,"))" |
             . as $extinf |
 
             (if ($drmScheme == "clearkey") and ($drmLicense | test("^[a-zA-Z0-9]+:[a-zA-Z0-9]+")) then
@@ -92,21 +133,20 @@ jobs:
               $link
             ] | join("\n")
 
-            end
+            else empty end
           ' >> tamil.m3u
 
-          # Validate output
+          # Final validation
           LINE_COUNT=$(wc -l < tamil.m3u)
           if [ "$LINE_COUNT" -le 1 ]; then
             echo "❌ tamil.m3u has only #EXTM3U ($LINE_COUNT lines)"
-            echo "🔍 First 10 lines:"
-            head -n 10 tamil.m3u
-            echo "🔍 JSON sample:"
-            echo "$JSON" | jq '.[0:2]' 2>/dev/null || echo "$JSON" | head -c 300
+            echo "🔍 No Tamil channels matched. Sample names:"
+            echo "$JSON" | jq -r 'normalize | .[0:5][] | .name // .title // "–"' 2>/dev/null | head -n 5
             exit 1
           fi
 
-          echo "✅ tamil.m3u created ($LINE_COUNT lines, $(wc -c < tamil.m3u) bytes)"
+          CHANNEL_COUNT=$(grep -c "^#EXTINF" tamil.m3u)
+          echo "✅ tamil.m3u created: $CHANNEL_COUNT Tamil channels ($LINE_COUNT lines)"
           echo "📺 First channel:"
           awk '/^#EXTINF/,/^https?:/ { print; if (/^https?:/) exit }' tamil.m3u
 
@@ -121,5 +161,5 @@ jobs:
             exit 0
           fi
 
-          git commit -m "✅ Auto-update Tamil M3U: $(date -u '+%Y-%m-%d %H:%M')"
+          git commit -m "✅ Auto-update Tamil M3U: $CHANNEL_COUNT channels | $(date -u '+%Y-%m-%d %H:%M')"
           git push origin main
