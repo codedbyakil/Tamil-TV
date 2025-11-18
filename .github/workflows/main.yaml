@@ -38,9 +38,11 @@ jobs:
 
           echo "#EXTM3U" > tamil.m3u
 
+          # ✅ Exact channel names (case-insensitive match)
+          # Preserve spaces, "HD", "Tamil", etc. — no cleaning
           echo "$JSON" | jq -r '
             # Normalize structure
-            def normalize:
+            def channels:
               if type == "array" then .
               elif type == "object" then
                 if has("channels") and (.channels | type == "array") then .channels
@@ -52,67 +54,54 @@ jobs:
               else []
               end;
 
-            # Clean name for matching
-            def clean_name:
-              (.name // .title // .channel_name // "") |
-              ascii_downcase |
-              gsub("\\s+"; " ") |
-              gsub("( hd| sd| •|:| - .*| \\(.*?\\)| \\[.*?\\]| hd$| sd$| tv$| channel$)"; "") |
-              gsub("^\\s+|\\s+$"; "");
+            # Your exact list (lowercase for safe compare)
+            [
+              "sun tv hd",
+              "sun music hd",
+              "sun life",
+              "adithya tv",
+              "ktv hd",
+              "star vijay hd",
+              "vijay super",
+              "colors tamil",
+              "jaya tv hd",
+              "jaya plus",
+              "j movies",
+              "polimer tv",
+              "vasanth tv",
+              "kalaignar tv",
+              "raj tv",
+              "disney channel",
+              "disney junior",
+              "hungama",
+              "super hungama",
+              "sonic tamil",
+              "nick tamil",
+              "nickelodeon jr.",
+              "pogo tamil",
+              "cartoon network tamil",
+              "cn hd+ tamil",
+              "discovery kids tamil",
+              "d tamil",
+              "history tv18 hd tamil"
+            ] as $allowlist |
 
-            # ✅ Exact allowlist (normalized)
-            def in_allowlist:
-              clean_name as $n |
-              [
-                "sun",                  # covers Sun TV, Sun News, Sun Music, Sun Life
-                "star vijay",
-                "zee tamil",
-                "colors tamil",
-                "ktv",
-                "vijay super",
-                "zee thirai",
-                "chutti",
-                "adithya",
-                "j movies",
-                "jaya plus",
-                "polimer",
-                "vasanth",
-                "kalaignar",
-                "jaya",
-                "raj tv",
-                "disney",
-                "hungama",
-                "disney junior",
-                "sonic",
-                "nickelodeon",
-                "pogo",
-                "cartoon network",
-                "sony yay"
-              ] as $list |
-              ($list | map(select($n | contains(.))) | length > 0) or
-              # Also include any news channel from known Tamil brands
-              ($n | contains("news") and (
-                $n | contains("sun") or contains("kalaignar") or
-                contains("polimer") or contains("jaya") or
-                contains("raj tv") or contains("than") or
-                contains("adithya") or contains("vasanth")
-              ));
-
-            normalize |
+            channels |
             map(select(type == "object")) |
             map(
-              .clean_name = clean_name
+              (.name // .title // "") as $name |
+              select(
+                ($name | ascii_downcase) as $n |
+                ($allowlist | index($n)) != null and
+                (.link // .url // "") != ""
+              )
             ) |
-            # Filter by allowlist + has link
-            map(select(
-              (.link // .url // "") != "" and in_allowlist
-            )) |
-            # Deduplicate by clean_name (keep first)
-            group_by(.clean_name) |
+            # Deduplicate by exact name (keep first)
+            group_by(.name // .title // "") |
             map(.[0]) |
             .[] |
 
-            (.name // .title // "Unknown") as $orig_name |
+            (.name // .title // "Unknown") as $name |
             (.tvg_id // .tvgId // .id // "") as $tvg_id |
             (.tvg_logo // .logo // .icon // "") as $tvg_logo |
             (.drmScheme // .drm_scheme // .drm // "") as $drmScheme |
@@ -124,7 +113,7 @@ jobs:
               (if ($tvg_id | length > 0) then "tvg-id=\"\($tvg_id)\" " else "" end) +
               "group-title=\"Tamil\" " +
               (if ($tvg_logo | length > 0) then "tvg-logo=\"\($tvg_logo)\" " else "" end) +
-              ",\($orig_name | gsub(","; "\\,"))" |
+              ",\($name | gsub(","; "\\,"))" |
             . as $extinf |
 
             (if ($drmScheme == "clearkey") and ($drmLicense | test("^[a-zA-Z0-9]+:[a-zA-Z0-9]+")) then
@@ -147,24 +136,18 @@ jobs:
             ] | join("\n")
           ' >> tamil.m3u
 
-          # Final check
+          # Validation
           LINE_COUNT=$(wc -l < tamil.m3u)
           CHANNEL_COUNT=$(grep -c "^#EXTINF" tamil.m3u)
           if [ "$LINE_COUNT" -le 1 ]; then
-            echo "❌ tamil.m3u empty — checking allowlist matches..."
-            echo "$JSON" | jq -r '
-              normalize |
-              map(select(type == "object")) |
-              .[] |
-              clean_name as $cn |
-              (.name // .title // "–") + " → " + $cn +
-              (if in_allowlist then " ✅" else " ❌" end)
-            ' 2>/dev/null | head -n 20
+            echo "❌ tamil.m3u has only #EXTM3U"
+            echo "🔍 Available channel names in JSON (first 30):"
+            echo "$JSON" | jq -r 'channels | .[0:30][] | .name // .title // "–"' 2>/dev/null
             exit 1
           fi
 
-          echo "✅ tamil.m3u created: $CHANNEL_COUNT channels ($LINE_COUNT lines)"
-          echo "📋 Channels included:"
+          echo "✅ tamil.m3u created: $CHANNEL_COUNT channels"
+          echo "📋 Matched channels:"
           grep "^#EXTINF" tamil.m3u | sed 's/.*,//' | sort
 
       - name: Commit & Push
