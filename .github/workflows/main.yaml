@@ -52,59 +52,62 @@ jobs:
               else []
               end;
 
-            # Clean & normalize name for matching & dedup
+            # Clean name for matching
             def clean_name:
               (.name // .title // .channel_name // "") |
               ascii_downcase |
               gsub("\\s+"; " ") |
-              gsub("( hd| sd| •|:| - .*| \\(.*?\\)| \\[.*?\\]| hd$| sd$)"; "") |
+              gsub("( hd| sd| •|:| - .*| \\(.*?\\)| \\[.*?\\]| hd$| sd$| tv$| channel$)"; "") |
               gsub("^\\s+|\\s+$"; "");
 
-            # Strict Tamil channel list (case-insensitive exact/fuzzy match)
-            # Only include if name matches *and* does NOT contain Hindi/regional keywords
-            def is_tamil_channel:
+            # ✅ Exact allowlist (normalized)
+            def in_allowlist:
               clean_name as $n |
-              # First, exclude non-Tamil explicitly
-              if (
-                $n | test("hindi|gujarati|marathi|punjabi|bengali|odia|telugu|kannada|malayalam|rajasthan|news18|ndtv|aaj tak|zeenews|republic")
-              ) then false
-              else
-                # ✅ Approved Tamil channels (GEC, Movies, News, Music, Kids-with-Tamil)
-                $n | (
-                  # Major GECs
-                  contains("sun tv") or contains("star vijay") or contains("vijay super") or
-                  test("zee.*tamil") or test("colors.*tamil") or
-                  contains("ktv") or contains("polimer tv") or contains("kalaignar tv") or
-                  contains("vasanth tv") or contains("adithya tv") or contains("sun life") or
-
-                  # Movies
-                  contains("zee thirai") or contains("thirai") or contains("sun cinemas") or
-                  contains("j movies") or contains("jaya plus") or
-
-                  # News (only if "tamil" or known Tamil brand)
-                  (contains("sun news") and ($n | contains("tamil") or contains("sun"))) or
-                  (contains("news") and ($n | test("kalaignar|jaya|raj tv|polimer|than|thanthi"))) or
-
-                  # Music & Kids
-                  contains("sun music") or contains("chutti tv") or
-
-                  # Kids *with Tamil audio only* — must have "tamil" in name
-                  (contains("hungama") and contains("tamil")) or
-                  (contains("disney") and contains("tamil")) or
-                  (contains("pogo") and contains("tamil")) or
-                  (contains("cartoon network") and contains("tamil")) or
-                  (contains("sony yay") and contains("tamil"))
-                )
-              end;
+              [
+                "sun",                  # covers Sun TV, Sun News, Sun Music, Sun Life
+                "star vijay",
+                "zee tamil",
+                "colors tamil",
+                "ktv",
+                "vijay super",
+                "zee thirai",
+                "chutti",
+                "adithya",
+                "j movies",
+                "jaya plus",
+                "polimer",
+                "vasanth",
+                "kalaignar",
+                "jaya",
+                "raj tv",
+                "disney",
+                "hungama",
+                "disney junior",
+                "sonic",
+                "nickelodeon",
+                "pogo",
+                "cartoon network",
+                "sony yay"
+              ] as $list |
+              ($list | map(select($n | contains(.))) | length > 0) or
+              # Also include any news channel from known Tamil brands
+              ($n | contains("news") and (
+                $n | contains("sun") or contains("kalaignar") or
+                contains("polimer") or contains("jaya") or
+                contains("raj tv") or contains("than") or
+                contains("adithya") or contains("vasanth")
+              ));
 
             normalize |
             map(select(type == "object")) |
-            # Filter & deduplicate
             map(
               .clean_name = clean_name
             ) |
-            map(select(.clean_name != "" and (.link // "") != "" and is_tamil_channel)) |
-            # Deduplicate by clean_name — keep first occurrence
+            # Filter by allowlist + has link
+            map(select(
+              (.link // .url // "") != "" and in_allowlist
+            )) |
+            # Deduplicate by clean_name (keep first)
             group_by(.clean_name) |
             map(.[0]) |
             .[] |
@@ -144,24 +147,25 @@ jobs:
             ] | join("\n")
           ' >> tamil.m3u
 
-          # Validation
+          # Final check
           LINE_COUNT=$(wc -l < tamil.m3u)
           CHANNEL_COUNT=$(grep -c "^#EXTINF" tamil.m3u)
           if [ "$LINE_COUNT" -le 1 ]; then
-            echo "❌ tamil.m3u empty or only #EXTM3U"
-            echo "🔍 First 10 normalized names in JSON (for debugging):"
+            echo "❌ tamil.m3u empty — checking allowlist matches..."
             echo "$JSON" | jq -r '
               normalize |
               map(select(type == "object")) |
-              .[0:10][] |
-              (.name // .title // "–") + " → " + ([clean_name] | @csv)
-            ' 2>/dev/null || echo "⚠️ jq debug failed"
+              .[] |
+              clean_name as $cn |
+              (.name // .title // "–") + " → " + $cn +
+              (if in_allowlist then " ✅" else " ❌" end)
+            ' 2>/dev/null | head -n 20
             exit 1
           fi
 
-          echo "✅ tamil.m3u created: $CHANNEL_COUNT unique Tamil channels ($LINE_COUNT lines)"
-          echo "📺 First channel:"
-          awk '/^#EXTINF/,/^https?:/ { print; if (/^https?:/) exit }' tamil.m3u
+          echo "✅ tamil.m3u created: $CHANNEL_COUNT channels ($LINE_COUNT lines)"
+          echo "📋 Channels included:"
+          grep "^#EXTINF" tamil.m3u | sed 's/.*,//' | sort
 
       - name: Commit & Push
         run: |
