@@ -1,7 +1,7 @@
 #EXTM3U
 
-#EXTINF:-1 tvg-logo="https://upload.wikimedia.org/wikipedia/en/thumb/8/85/Zee_Tamizh_2020.svg/320px-Zee_Tamizh_2020.svg.png",Zee Thirai
+#EXTINF:-1 tvg-logo="https://dvdh7g0f0hwck.cloudfront.net/assets/images/channel/ZeeThiraiHD_Transparent_148bf888-7a23-42a7-b5b9-fcd69a285a2f.png",Zee Thirai
 http://webhop.live/live/juno123/juno123/181966.ts
 
-#EXTINF:-1 tvg-logo="https://upload.wikimedia.org/wikipedia/en/thumb/8/85/Zee_Tamizh_2020.svg/320px-Zee_Tamizh_2020.svg.png",Zee Tamil
+#EXTINF:-1 tvg-logo="https://dvdh7g0f0hwck.cloudfront.net/assets/images/channel/ZeeTamilHD_Transparent_a5bfaeec-a389-4264-93d9-902a446ef336.png",Zee Tamil
 http://webhop.live/live/juno123/juno123/98897.ts
