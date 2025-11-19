@@ -1,0 +1,7 @@
+#EXTM3U
+
+#EXTINF:-1 tvg-logo="https://upload.wikimedia.org/wikipedia/en/thumb/8/85/Zee_Tamizh_2020.svg/320px-Zee_Tamizh_2020.svg.png",Zee Thirai
+http://webhop.live/live/juno123/juno123/181966.ts
+
+#EXTINF:-1 tvg-logo="https://upload.wikimedia.org/wikipedia/en/thumb/8/85/Zee_Tamizh_2020.svg/320px-Zee_Tamizh_2020.svg.png",Zee Tamil
+http://webhop.live/live/juno123/juno123/98897.ts
