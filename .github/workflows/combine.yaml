@@ -23,30 +23,33 @@ jobs:
       - name: Verify files
         run: |
           for f in tamil.m3u zee.m3u local.m3u; do
-            [ -f "$f" ] || { echo "❌ $f missing"; exit 1; }
+            if [ ! -f "$f" ]; then
+              echo "❌ $f missing — aborting"
+              exit 1
+            fi
           done
-          echo "✅ All files present."
+          echo "✅ All required files present."
 
-      - name: Normalize files
+      - name: Normalize line endings & clean BOM
         run: |
           sudo apt-get update && sudo apt-get install -y dos2unix
           for f in tamil.m3u zee.m3u local.m3u; do
-            sed -i '1s/^\xEF\xBB\xBF//' "$f"     # Remove BOM
-            dos2unix "$f" 2>/dev/null || sed -i 's/\r$//' "$f"
-            sed -i 's/[ \t]*$//' "$f"            # Trim trailing space
+            sed -i '1s/^\xEF\xBB\xBF//' "$f"      # Remove UTF-8 BOM
+            dos2unix "$f" 2>/dev/null || sed -i 's/\r$//' "$f"  # CRLF → LF
+            sed -i 's/[ \t]*$//' "$f"             # Trim trailing whitespace
           done
 
-      - name: 🔍 Debug zee.m3u (first 8 lines)
+      - name: 🔍 Debug zee.m3u (structure check)
         run: |
-          echo "🔍 zee.m3u (first 8 lines, escaped):"
-          head -n 8 zee.m3u | cat -A
+          echo "🔍 Sample of zee.m3u (first 12 lines, escaped):"
+          head -n 12 zee.m3u | cat -A
 
       - name: Build main.m3u
         run: |
           OUTPUT="main.m3u"
           echo "#EXTM3U x-tvg-url=\"https://iptv-org.github.io/epg/guides/tamil.xml\"" > "$OUTPUT"
 
-          # 1️⃣ tamil.m3u — keep as-is (skip #EXTM3U)
+          # 1️⃣ tamil.m3u — pass-through (skip #EXTM3U)
           echo "# === tamil.m3u ===" >> "$OUTPUT"
           awk '
             /^#EXTM3U/ { next }
@@ -54,76 +57,117 @@ jobs:
             { print }
           ' tamil.m3u >> "$OUTPUT"
 
-          # 2️⃣ ✅ zee.m3u — robust parsing, force group-title="Tamil", fix #EXTINF:-1
+          # 2️⃣ ✅ zee.m3u — Preserve logos & attributes; force group-title="Tamil"
           echo "" >> "$OUTPUT"
-          echo "# === zee.m3u → Tamil ===" >> "$OUTPUT"
+          echo "# === zee.m3u → Tamil (logos preserved) ===" >> "$OUTPUT"
           awk '
-            BEGIN { in_extinf = 0; channel_name = ""; }
+            BEGIN { in_extinf = 0; extinf_line = ""; }
+
             /^#EXTINF:/ {
               in_extinf = 1;
-              # Extract everything after the last comma (channel name)
-              i = match($0, /,[^,]*$/);
-              if (i > 0) {
-                channel_name = substr($0, i + 1);
-                gsub(/^[ \t"]+|[ \t"]+$/, "", channel_name);
-              } else {
-                channel_name = "Zee Channel";
-              }
+              extinf_line = $0;
               next;
             }
-            in_extinf && /^[^#]/ && length($0) > 0 {
+
+            in_extinf && /^[ \t]*http/ {
               url = $0;
-              # ✅ CORRECT FORMAT: #EXTINF:-1 group-title="Tamil",Name
-              print "#EXTINF:-1 group-title=\"Tamil\"," channel_name;
-              print url;
+              gsub(/^[ \t]+|[ \t]+$/, "", url);
+              if (length(url) == 0) { next; }
+
+              # ✅ Preserve all attributes, but ensure group-title="Tamil"
+              # Remove existing group-title if any, then add ours at end
+              gsub(/group-title="[^"]*"/, "", extinf_line);
+              gsub(/group-title=[^, \t]*/, "", extinf_line);  # no quotes variant
+              
+              # Ensure no trailing space before comma
+              gsub(/ +,/, ",", extinf_line);
+              
+              # Inject group-title="Tamil" before the final comma+name part
+              # Match: everything up to the final comma (channel name separator)
+              if (match(extinf_line, /,[^,]*$/)) {
+                prefix = substr(extinf_line, 1, RSTART - 1);
+                suffix = substr(extinf_line, RSTART);
+                # Insert group-title at end of attributes (before comma)
+                new_extinf = prefix " group-title=\"Tamil\"" suffix;
+                print new_extinf;
+                print url;
+              } else {
+                # Fallback: append group-title before comma
+                print extinf_line " group-title=\"Tamil\"";
+                print url;
+              }
+
               in_extinf = 0;
-              channel_name = "";
+              extinf_line = "";
               next;
             }
-            # Skip all other lines (comments, props, cookies — add later if needed)
+
+            # Skip non-matching lines (comments, props, blank lines)
+            { next; }
           ' zee.m3u >> "$OUTPUT"
 
-          # 3️⃣ local.m3u — same logic, group="Local Channels"
+          # 3️⃣ local.m3u — group-title="Local Channels", preserve logos
           echo "" >> "$OUTPUT"
-          echo "# === local.m3u → Local Channels ===" >> "$OUTPUT"
+          echo "# === local.m3u → Local Channels (logos preserved) ===" >> "$OUTPUT"
           awk '
-            BEGIN { in_extinf = 0; channel_name = ""; }
+            BEGIN { in_extinf = 0; extinf_line = ""; }
+
             /^#EXTINF:/ {
               in_extinf = 1;
-              i = match($0, /,[^,]*$/);
-              if (i > 0) {
-                channel_name = substr($0, i + 1);
-                gsub(/^[ \t"]+|[ \t"]+$/, "", channel_name);
-              } else {
-                channel_name = "Local Channel";
-              }
+              extinf_line = $0;
               next;
             }
-            in_extinf && /^[^#]/ && length($0) > 0 {
+
+            in_extinf && /^[ \t]*http/ {
               url = $0;
-              print "#EXTINF:-1 group-title=\"Local Channels\"," channel_name;
-              print url;
+              gsub(/^[ \t]+|[ \t]+$/, "", url);
+              if (length(url) == 0) { next; }
+
+              gsub(/group-title="[^"]*"/, "", extinf_line);
+              gsub(/group-title=[^, \t]*/, "", extinf_line);
+              gsub(/ +,/, ",", extinf_line);
+
+              if (match(extinf_line, /,[^,]*$/)) {
+                prefix = substr(extinf_line, 1, RSTART - 1);
+                suffix = substr(extinf_line, RSTART);
+                new_extinf = prefix " group-title=\"Local Channels\"" suffix;
+                print new_extinf;
+                print url;
+              } else {
+                print extinf_line " group-title=\"Local Channels\"";
+                print url;
+              }
+
               in_extinf = 0;
-              channel_name = "";
+              extinf_line = "";
               next;
             }
+            { next; }
           ' local.m3u >> "$OUTPUT"
 
-          # Stats
-          TAMIL=$(grep -c '^#EXTINF:-1 group-title="Tamil"' "$OUTPUT" || echo 0)
-          LOCAL=$(grep -c '^#EXTINF:-1 group-title="Local Channels"' "$OUTPUT" || echo 0)
-          echo "✅ main.m3u built:"
-          echo "   🎯 Tamil (tamil + zee): $TAMIL"
+          # 📊 Stats
+          TAMIL=$(grep -c '^#EXTINF:-1.*group-title="Tamil"' "$OUTPUT" 2>/dev/null || echo 0)
+          LOCAL=$(grep -c '^#EXTINF:-1.*group-title="Local Channels"' "$OUTPUT" 2>/dev/null || echo 0)
+          TOTAL=$((TAMIL + LOCAL))
+          echo "✅ main.m3u built with $TOTAL channels:"
+          echo "   🎯 Tamil (incl. Zee): $TAMIL"
           echo "   🏠 Local Channels: $LOCAL"
+
+          # Optional: show first few Zee entries
+          echo ""
+          echo "📌 First 3 Zee-derived entries:"
+          awk '/# === zee\.m3u/,/# === local\.m3u/ { if (/^#EXTINF/ || /^http/) print "  " $0 }' "$OUTPUT" | head -n 6
 
       - name: Commit main.m3u
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add main.m3u
+
           if git diff --cached --quiet; then
-            echo "➡️ No change — skipping commit"
+            echo "➡️ No changes — skipping commit"
             exit 0
           fi
-          git commit -m "📺 main.m3u: $TAMIL Tamil + $LOCAL Local"
+
+          git commit -m "📺 main.m3u: $TAMIL Tamil (incl. Zee w/ logos) + $LOCAL Local"
           git push origin main
