@@ -1,4 +1,4 @@
-name: Build main.m3u (Tamil + Zee + Local) with Channel Numbers & Sorting
+name: Build main.m3u (Tamil + Zee + Local) — Correct Order & Names
 
 on:
   workflow_run:
@@ -36,63 +36,20 @@ jobs:
             sed -i 's/[ \t]*$//' "$f"
           done
 
-      - name: Build main.m3u with sorting & numbering
+      - name: Build main.m3u with exact priority order
         run: |
           OUTPUT="main.m3u"
           echo "#EXTM3U x-tvg-url=\"https://iptv-org.github.io/epg/guides/tamil.xml\"" > "$OUTPUT"
+          TMP=$(mktemp -d)
 
-          # === 1. Extract ALL Tamil-category channels (from tamil.m3u + zee.m3u) ===
-          echo "# === Tamil Channels (Sorted & Numbered) ===" >> "$OUTPUT"
+          # === Step 1: Extract all Tamil-category blocks (tamil.m3u + zee.m3u) ===
+          {
+            awk '/^#EXTINF:/ {f=1;block=$0;next} f {block=block"\n"$0} /^[ \t]*http/ {f=0;print "---BLOCK---\n"block; block=""}' tamil.m3u
+            awk '/^#EXTINF:/ {f=1;block=$0;next} f {block=block"\n"$0} /^[ \t]*http/ {f=0;print "---BLOCK---\n"block; block=""}' zee.m3u
+          } > "$TMP/tamil_blocks.txt"
 
-          # Create temp files
-          TMP_DIR=$(mktemp -d)
-          TAMIL_RAW="$TMP_DIR/tamil_raw.txt"
-          ZEE_RAW="$TMP_DIR/zee_raw.txt"
-          ALL_TAMIL="$TMP_DIR/all_tamil.txt"
-
-          # Extract blocks from tamil.m3u (skip #EXTM3U)
-          awk '
-            /^#EXTM3U/ { next }
-            /^#EXTINF/ {
-              block = $0 "\n"; in_block = 1; next;
-            }
-            in_block && NF == 0 { next }  # skip blank lines inside?
-            in_block {
-              block = block $0 "\n";
-              if (/^[ \t]*http/) in_block = 0;
-            }
-            !in_block && block != "" {
-              print "---CHANNEL---";
-              printf "%s", block;
-              block = "";
-            }
-            END { if (block != "") { print "---CHANNEL---"; printf "%s", block; } }
-          ' tamil.m3u > "$TAMIL_RAW"
-
-          # Extract blocks from zee.m3u
-          awk '
-            /^#EXTINF/ {
-              block = $0 "\n"; in_block = 1; next;
-            }
-            in_block && NF == 0 { next }
-            in_block {
-              block = block $0 "\n";
-              if (/^[ \t]*http/) in_block = 0;
-            }
-            !in_block && block != "" {
-              print "---CHANNEL---";
-              printf "%s", block;
-              block = "";
-            }
-            END { if (block != "") { print "---CHANNEL---"; printf "%s", block; } }
-          ' zee.m3u > "$ZEE_RAW"
-
-          # Combine
-          cat "$TAMIL_RAW" "$ZEE_RAW" > "$ALL_TAMIL"
-
-          # === 2. Define priority list (normalized) ===
-          # We'll match using: lower, trim, remove "hd", "tamil", "tamil hd", etc.
-          cat > "$TMP_DIR/priority.txt" <<'EOF'
+          # === Step 2: Priority list (simple keys) ===
+          cat > "$TMP/priority_simple.txt" <<'EOF'
 sun tv
 ktv
 star vijay
@@ -101,7 +58,7 @@ colors tamil
 polimer tv
 kalaignar tv
 vijay super
-zee thirai
+zee Thirai
 sun life
 adithya tv
 sun music
@@ -123,228 +80,165 @@ super hungama
 discovery kids
 EOF
 
-          # === 3. Sort & Number Tamil Channels ===
-          # Script to parse, normalize name, match priority, assign number
-          awk -v priority_file="$TMP_DIR/priority.txt" '
-            BEGIN {
-              # Load priority list
-              prio_count = 0;
-              while ((getline line < priority_file) > 0) {
-                gsub(/^[ \t]+|[ \t]+$/, "", line);
-                line = tolower(line);
-                prio[line] = ++prio_count;
-              }
-              close(priority_file);
+          # === Step 3: Sort & Number ===
+          awk -v prio="$TMP/priority_simple.txt" '
+            function norm(s,    t) {
+              t = tolower(s);
+              gsub(/[^a-z0-9]/, "", t);
+              return t;
             }
 
-            /^---CHANNEL---/ {
-              if (block != "") process_block(block);
-              block = "";
-              next;
+            BEGIN {
+              # Load priority keys → index
+              while ((getline line < prio) > 0) {
+                gsub(/^[ \t]+|[ \t]+$/, "", line);
+                if (line == "") continue;
+                key = norm(line);
+                prio_idx[key] = ++n;
+              }
+              close(prio);
+            }
+
+            /^---BLOCK---/ {
+              if (block != "") process(block);
+              block = ""; next;
             }
             { block = (block == "" ? $0 : block "\n" $0); }
-            END { if (block != "") process_block(block); }
+            END { if (block != "") process(block); }
 
-            function normalize_name(extinf_line,    name_part, clean) {
-              # Extract display name: after last comma
-              match(extinf_line, /,[^,]*$/);
-              if (RSTART > 0) {
-                name_part = substr(extinf_line, RSTART + 1);
-              } else {
-                name_part = "Unknown";
-              }
-              gsub(/^[ \t"'\''"]+|[ \t"'\''"]+$/, "", name_part);
-              # Normalize: lower, remove HD/Tamil/etc.
-              clean = tolower(name_part);
-              gsub(/ hd$/, "", clean);
-              gsub(/ hd | hd$/, " ", clean);
-              gsub(/ tamil$/, "", clean);
-              gsub(/ tamil hd$/, "", clean);
-              gsub(/ tv hd$/, " tv", clean);
-              gsub(/ tv$/, "", clean);  # optional: keep "tv" for disambiguation?
-              gsub(/  +/, " ", clean);
-              gsub(/^[ \t]+|[ \t]+$/, "", clean);
-              return clean;
-            }
-
-            function process_block(blk,    lines, n, extinf_idx, extinf_line, norm_name, prio_rank, new_extinf, name_part, url) {
+            function process(blk,    lines, n, extinf, name_raw, name_norm, i) {
               n = split(blk, lines, /\n/);
-              extinf_idx = -1;
               for (i = 1; i <= n; i++) {
                 if (lines[i] ~ /^#EXTINF:/) {
-                  extinf_idx = i;
-                  extinf_line = lines[i];
+                  extinf = lines[i];
+                  match(extinf, /,[^,]*$/);
+                  if (RSTART > 0) {
+                    name_raw = substr(extinf, RSTART + 1);
+                    gsub(/^[ \t"'\''"]+|[ \t"'\''"]+$/, "", name_raw);
+                  } else {
+                    name_raw = "Unknown";
+                  }
                   break;
                 }
               }
-              if (extinf_idx == -1) return;
+              if (!extinf) return;
 
-              norm_name = normalize_name(extinf_line);
-              prio_rank = prio[norm_name];
-
-              # Extract original name for display (before comma)
-              match(extinf_line, /,[^,]*$/);
-              if (RSTART > 0) {
-                prefix = substr(extinf_line, 1, RSTART - 1);
-                name_part = substr(extinf_line, RSTART + 1);
-                gsub(/^[ \t"'\''"]+|[ \t"'\''"]+$/, "", name_part);
-              } else {
-                prefix = extinf_line;
-                name_part = "Unknown";
-              }
-
-              # Assign channel number later (we need full list first)
-              # Store: [prio_rank, norm_name, original_name, extinf_prefix, full_block]
-              blocks[++block_count] = prio_rank SUBSEP norm_name SUBSEP name_part SUBSEP prefix SUBSEP blk;
-            }
-          ' "$ALL_TAMIL" > "$TMP_DIR/unsorted_tamil.txt"
-
-          # Now sort & assign numbers
-          awk '
-            BEGIN {
-              FS = SUBSEP;
-              block_count = 0;
-            }
-            {
-              blocks[++block_count] = $0;
-              ranks[block_count] = ($1 == "") ? 9999 : ($1 + 0);
-              names[block_count] = $2;
-            }
-            END {
-              # Sort by rank (numeric), then by norm_name
-              for (i = 1; i <= block_count; i++) {
-                for (j = i + 1; j <= block_count; j++) {
-                  if (ranks[i] > ranks[j] || (ranks[i] == ranks[j] && names[i] > names[j])) {
-                    # swap
-                    tmp = blocks[i]; blocks[i] = blocks[j]; blocks[j] = tmp;
-                    tmp = ranks[i]; ranks[i] = ranks[j]; ranks[j] = tmp;
-                    tmp = names[i]; names[i] = names[j]; names[j] = tmp;
+              name_norm = norm(name_raw);
+              found = 0;
+              for (key in prio_idx) {
+                # Try fuzzy match: if key is substring of name_norm (e.g., "zeetamil" in "zeetamilhd")
+                if (index(name_norm, key) == 1 || index(name_norm, key) > 0) {
+                  # Prefer exact or prefix match
+                  if (name_norm == key || index(name_norm, key) == 1) {
+                    bucket[key] = (bucket[key] ? bucket[key] "\n---\n" : "") blk;
+                    found = 1;
+                    break;
                   }
                 }
               }
+              if (!found) unsorted = (unsorted ? unsorted "\n---\n" : "") blk;
+            }
 
+            END {
+              # Output in priority order
               chno = 1;
-              for (i = 1; i <= block_count; i++) {
-                split(blocks[i], f, SUBSEP);
-                prio_rank = f[1];
-                norm_name = f[2];
-                orig_name = f[3];
-                prefix = f[4];
-                blk = f[5];
-
-                # Rebuild #EXTINF: inject tvg-chno and optionally prepend "#N "
-                # Remove existing tvg-chno if any
-                gsub(/tvg-chno="[^"]*"/, "", prefix);
-                gsub(/tvg-chno=[^, \t]*/, "", prefix);
-                # Ensure space before comma
-                gsub(/ +,/, ",", prefix);
-
-                # Option A: prepend "#1 " to display name (visible in players)
-                # new_name = "#" chno " " orig_name;
-                # Option B: only use tvg-chno (cleaner)
-                new_name = orig_name;
-
-                new_extinf = prefix " tvg-chno=\"" chno "\"";
-                # Insert before comma
-                if (match(new_extinf, /,[^,]*$/)) {
-                  pre = substr(new_extinf, 1, RSTART - 1);
-                  suf = substr(new_extinf, RSTART);
-                  new_extinf = pre suf;
-                } else {
-                  new_extinf = new_extinf ",";
+              while ((getline line < prio) > 0) {
+                gsub(/^[ \t]+|[ \t]+$/, "", line);
+                if (line == "") continue;
+                key = norm(line);
+                if (key in bucket) {
+                  n = split(bucket[key], arr, /---\n/);
+                  for (i = 1; i <= n; i++) {
+                    gsub(/^\n+/, "", arr[i]);
+                    if (arr[i] != "") {
+                      output_block(arr[i], chno);
+                      chno++;
+                    }
+                  }
                 }
-                # Fix double comma or missing comma
-                gsub(/, +,/, ",", new_extinf);
-                if (new_extinf !~ /,/) new_extinf = new_extinf ",";
-                # Ensure exactly one comma before name
-                new_extinf = gensub(/(.*),[^,]*$/, "\\1," new_name, 1, new_extinf);
-
-                # Replace old EXTINF with new one
-                gsub(/^#EXTINF:[^\n]*/, new_extinf, blk);
-                printf "%s\n", blk;
-
-                chno++;
+              }
+              # Append unmatched
+              if (unsorted != "") {
+                n = split(unsorted, arr, /---\n/);
+                for (i = 1; i <= n; i++) {
+                  gsub(/^\n+/, "", arr[i]);
+                  if (arr[i] != "") {
+                    output_block(arr[i], chno);
+                    chno++;
+                  }
+                }
               }
             }
-          ' "$TMP_DIR/unsorted_tamil.txt" >> "$OUTPUT"
 
-          # === 4. Process local.m3u → sort alphabetically by channel name ===
-          echo "" >> "$OUTPUT"
+            function output_block(blk, num,    lines, n, i) {
+              n = split(blk, lines, /\n/);
+              for (i = 1; i <= n; i++) {
+                if (lines[i] ~ /^#EXTINF:/) {
+                  gsub(/tvg-chno="[^"]*"/, "", lines[i]);
+                  gsub(/tvg-chno=[^, \t]*/, "", lines[i]);
+                  if (match(lines[i], /,[^,]*$/)) {
+                    pre = substr(lines[i], 1, RSTART - 1);
+                    suf = substr(lines[i], RSTART);
+                    lines[i] = pre " tvg-chno=\"" num "\"" suf;
+                  } else {
+                    lines[i] = lines[i] " tvg-chno=\"" num "\"";
+                  }
+                }
+                print lines[i];
+              }
+              print "";
+            }
+          ' "$TMP/tamil_blocks.txt" >> "$OUTPUT"
+
+          # === Step 4: Local channels (A→Z) ===
           echo "# === Local Channels (A→Z) ===" >> "$OUTPUT"
-
           awk '
-            BEGIN { block = ""; chno = 1; }
-            /^#EXTINF/ {
-              if (block != "") blocks[block_count++] = block;
-              block = $0 "\n"; next;
-            }
-            block != "" {
-              block = block $0 "\n";
-              if (/^[ \t]*http/) {
-                blocks[block_count++] = block;
-                block = "";
-              }
-            }
-            END { if (block != "") blocks[block_count++] = block; }
+            BEGIN { block = ""; }
+            /^#EXTINF:/ { if (block) blocks[++cnt]=block; block=$0; next }
+            block { block = block "\n" $0 }
+            /^[ \t]*http/ { in_url = 1 }
+            in_url && /^[^ \t#]/ { in_url = 0 }
+            END { if (block) blocks[++cnt]=block }
 
-            function get_name(extinf,    name_part) {
-              match(extinf, /,[^,]*$/);
-              if (RSTART > 0) {
-                name_part = substr(extinf, RSTART + 1);
-                gsub(/^[ \t"'\''"]+|[ \t"'\''"]+$/, "", name_part);
-                return tolower(name_part);
+            function name_key(b,    lines, n, i, s) {
+              n = split(b, lines, /\n/);
+              for (i=1; i<=n; i++) if (lines[i] ~ /^#EXTINF:/) {
+                match(lines[i], /,[^,]*$/);
+                if (RSTART>0) {
+                  s = substr(lines[i], RSTART+1);
+                  gsub(/^[ \t"'\''"]+|[ \t"'\''"]+$/, "", s);
+                  return tolower(s);
+                }
               }
               return "zzz";
             }
 
             END {
-              # Extract names and sort indices
-              for (i = 0; i < block_count; i++) {
-                match(blocks[i], /^#EXTINF:[^\n]*/);
-                extinf = substr(blocks[i], 1, RLENGTH);
-                names[i] = get_name(extinf);
-                idx[i] = i;
-              }
-              # Simple bubble sort by name
-              for (i = 0; i < block_count; i++) {
-                for (j = i + 1; j < block_count; j++) {
-                  if (names[idx[i]] > names[idx[j]]) {
-                    tmp = idx[i]; idx[i] = idx[j]; idx[j] = tmp;
-                  }
+              for (i=1; i<=cnt; i++) keys[i]=name_key(blocks[i]);
+              for (i=1; i<=cnt; i++) idx[i]=i;
+              for (i=1; i<=cnt; i++) for (j=i+1; j<=cnt; j++)
+                if (keys[idx[i]] > keys[idx[j]]) {
+                  tmp=idx[i]; idx[i]=idx[j]; idx[j]=tmp;
                 }
-              }
-              for (i = 0; i < block_count; i++) {
-                blk = blocks[idx[i]];
-                # Inject tvg-chno (optional, e.g., L1, L2… or just skip)
-                match(blk, /^#EXTINF:[^\n]*/);
-                extinf = substr(blk, 1, RLENGTH);
-                gsub(/tvg-chno="[^"]*"/, "", extinf);
-                gsub(/tvg-chno=[^, \t]*/, "", extinf);
-                gsub(/ +,/, ",", extinf);
-                new_extinf = extinf " tvg-chno=\"L" chno "\"";
-                if (match(new_extinf, /,[^,]*$/)) {
-                  pre = substr(new_extinf, 1, RSTART - 1);
-                  suf = substr(new_extinf, RSTART);
-                  new_extinf = pre suf;
-                } else {
-                  new_extinf = new_extinf ",";
+              for (i=1; i<=cnt; i++) {
+                b = blocks[idx[i]];
+                gsub(/tvg-chno="[^"]*"/, "", b);
+                gsub(/tvg-chno=[^, \t]*/, "", b);
+                if (match(b, /^#EXTINF:[^\n]*/)) {
+                  pre = substr(b, 1, RSTART+RLENGTH-1);
+                  rest = substr(b, RSTART+RLENGTH);
+                  b = pre " tvg-chno=\"L" i "\"" rest;
                 }
-                gsub(/^#EXTINF:[^\n]*/, new_extinf, blk);
-                printf "%s", blk;
-                chno++;
+                print b "\n";
               }
             }
           ' local.m3u >> "$OUTPUT"
 
-          # === Stats ===
-          TAMIL=$(awk '/group-title="Tamil"/ && /^#EXTINF/ { c++ } END { print c+0 }' "$OUTPUT")
-          LOCAL=$(awk '/group-title="Local Channels"/ && /^#EXTINF/ { c++ } END { print c+0 }' "$OUTPUT")
-          echo "✅ main.m3u built:"
-          echo "   📺 Tamil (numbered & sorted): $TAMIL"
-          echo "   📺 Local (A→Z sorted): $LOCAL"
-
-          # Cleanup
-          rm -rf "$TMP_DIR"
+          # Stats
+          TAMIL=$(awk '/group-title="Tamil"/ && /^#EXTINF/ {c++} END {print c+0}' "$OUTPUT")
+          LOCAL=$(awk '/group-title="Local Channels"/ && /^#EXTINF/ {c++} END {print c+0}' "$OUTPUT")
+          echo "✅ Built: $TAMIL Tamil (ordered), $LOCAL Local (A→Z)"
+          rm -rf "$TMP"
 
       - name: Commit main.m3u
         run: |
@@ -352,10 +246,10 @@ EOF
           git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add main.m3u
           if git diff --cached --quiet; then
-            echo "➡️ No changes — skipping commit"
+            echo "➡️ No changes"
             exit 0
           fi
-          TAMIL=$(awk '/group-title="Tamil"/ && /^#EXTINF/ { c++ } END { print c+0 }' main.m3u)
-          LOCAL=$(awk '/group-title="Local Channels"/ && /^#EXTINF/ { c++ } END { print c+0 }' main.m3u)
-          git commit -m "📺 main.m3u: $TAMIL Tamil (#1–#${TAMIL}) + $LOCAL Local (A→Z)"
+          T=$(awk '/group-title="Tamil"/ && /^#EXTINF/ {c++} END {print c+0}' main.m3u)
+          L=$(awk '/group-title="Local Channels"/ && /^#EXTINF/ {c++} END {print c+0}' main.m3u)
+          git commit -m "📺 main.m3u: $T Tamil (#1–#${T}) + $L Local (A→Z)"
           git push origin main
