@@ -155,3 +155,10 @@ https://jiotvpllive.cdn.jio.com/bpk-tv/Discovery_Channel_Tamil_BTS/output/index.
 #EXTVLCOPT:http-user-agent=plaYtv/7.1.5%20(Linux%3BAndroid%2015)%20ExoPlayerLib/2.11.6%20YGX/69.69.69.69
 #EXTHTTP:{"cookie":"__hdnea__=st=1763555401~exp=1763641801~acl=/*~hmac=e61bf9aaae848c0b7e9a192a5349fd75ce64c3e90ff7780e33ba629a9dab3ab0"}
 https://jiotvpllive.cdn.jio.com/bpk-tv/History_HD_BTS/output/index.mpd
+
+# === Zee Channels (merged into Tamil group) ===
+#EXTM3U
+#EXTINF:\1group-title="Tamil" tvg-logo="https://dvdh7g0f0hwck.cloudfront.net/assets/images/channel/ZeeThiraiHD_Transparent_148bf888-7a23-42a7-b5b9-fcd69a285a2f.png",Zee Thirai
+http://webhop.live/live/juno123/juno123/181966.ts
+#EXTINF:\1group-title="Tamil" tvg-logo="https://dvdh7g0f0hwck.cloudfront.net/assets/images/channel/ZeeTamilHD_Transparent_a5bfaeec-a389-4264-93d9-902a446ef336.png",Zee Tamil
+http://webhop.live/live/juno123/juno123/98897.ts
