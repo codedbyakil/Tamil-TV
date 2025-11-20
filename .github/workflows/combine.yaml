@@ -1,135 +1,68 @@
-name: Enhance Tamil M3U (Merge Zee + Preserve Local)
-
-permissions:
-  contents: write
+name: Enhance Tamil M3U (Merge Zee)
 
 on:
+  workflow_run:
+    workflows: ["Auto-Update Tamil M3U"]
+    types: [completed]
   workflow_dispatch:
-  schedule:
-    - cron: '*/30 * * * *'   # runs every 30 mins, after your first workflow likely finished
 
 jobs:
   enhance:
     runs-on: ubuntu-latest
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
     steps:
-      - name: Checkout main branch
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           ref: main
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Verify required files
+      - name: Install tools
+        run: sudo apt-get update && sudo apt-get install -y dos2unix
+
+      - name: Verify files
         run: |
-          for f in tamil.m3u zee.m3u local.m3u; do
-            if [ ! -f "$f" ]; then
-              echo "❌ Missing required file: $f"
-              exit 1
-            fi
-          done
-          echo "✅ All files present."
+          [ -f tamil.m3u ] && echo "✅ tamil.m3u exists" || { echo "❌ MISSING"; exit 1; }
+          [ -f zee.m3u ] && echo "✅ zee.m3u exists" || { echo "❌ MISSING"; exit 1; }
 
-      - name: Enhance tamil.m3u with Zee channels (→ Tamil group)
+      - name: Normalize zee.m3u
         run: |
-          TEMP_TAMIL=$(mktemp)
-          TEMP_ZEE=$(mktemp)
+          sed -i '1s/^\xEF\xBB\xBF//' zee.m3u
+          dos2unix zee.m3u 2>/dev/null || sed -i 's/\r$//' zee.m3u
+          sed -i 's/[ \t]*$//' zee.m3u
 
-          # 1️⃣ Copy existing tamil.m3u — keep header and all lines as-is
-          cp tamil.m3u "$TEMP_TAMIL"
-
-          # 2️⃣ Process zee.m3u: force all channels into group-title="Tamil"
-          awk '
+      - name: Merge zee.m3u into tamil.m3u (Tamil group)
+        run: |
+          # Extract Zee channels with correct group
+          ZEE_CHANNELS=$(awk '
             BEGIN { in_extinf = 0 }
             /^#EXTINF:/ {
               in_extinf = 1;
               line = $0;
-              # Ensure group-title="Tamil" — insert or replace
-              if (line ~ /group-title="[^"]*"/) {
-                gsub(/group-title="[^"]*"/, "group-title=\"Tamil\"", line);
-              } else {
-                # Insert after "-1 " (standard position)
-                sub(/(-1[ \t]+)/, "\\1group-title=\"Tamil\" ", line);
-              }
+              gsub(/group-title="[^"]*"/, "group-title=\"Tamil\"", line);
+              if (line !~ /group-title="Tamil"/) sub(/(-1[ \t]+)/, "\\1group-title=\"Tamil\" ", line);
               print line;
               next;
             }
-            in_extinf && /^[^#]/ {
-              # This is the URL line → print and reset
-              print $0;
-              in_extinf = 0;
-              next;
-            }
-            # Pass through other directive lines (KODIPROP, EXTHTTP, UA, etc.)
-            /^[^#]/ { in_extinf = 0 }  # reset on bare URL (shouldn’t happen here)
-            { if (!in_extinf && length($0) > 0) print }
-          ' zee.m3u > "$TEMP_ZEE"
+            in_extinf && /^[^#]/ { print; in_extinf = 0; next }
+            /^[^#]/ { in_extinf = 0 }
+            { if (!in_extinf && length($0)) print }
+          ' zee.m3u)
 
-          # 3️⃣ Append Zee channels to tamil.m3u
-          echo "" >> "$TEMP_TAMIL"   # blank line for readability
-          echo "# === Zee Channels (merged into Tamil group) ===" >> "$TEMP_TAMIL"
-          cat "$TEMP_ZEE" >> "$TEMP_TAMIL"
+          # Append to tamil.m3u
+          echo "" >> tamil.m3u
+          echo "# === MERGED FROM zee.m3u ===" >> tamil.m3u
+          echo "$ZEE_CHANNELS" >> tamil.m3u
 
-          # 4️⃣ Replace tamil.m3u with enhanced version
-          mv "$TEMP_TAMIL" tamil.m3u
+          echo "✅ Appended $(echo "$ZEE_CHANNELS" | grep -c '^#EXTINF') Zee channels to tamil.m3u"
 
-          # 5️⃣ Stats
-          TAMIL_ORIG=$(grep -c '^#EXTINF.*group-title="Tamil"' tamil.m3u 2>/dev/null | head -n1 || echo 0)
-          ZEE_COUNT=$(grep -c '^#EXTINF' "$TEMP_ZEE" || echo 0)
-          echo "🎯 Enhanced tamil.m3u:"
-          echo "   ➕ Original Tamil channels: $TAMIL_ORIG"
-          echo "   ➕ Zee channels added: $ZEE_COUNT"
-          echo "   📦 Total in 'Tamil' group: $(($TAMIL_ORIG + $ZEE_COUNT))"
-
-      - name: Generate final playlist (tamil + local)
-        run: |
-          OUTPUT="playlist.m3u"
-          echo "#EXTM3U" > "$OUTPUT"
-
-          # Add enhanced tamil.m3u (now includes Zee)
-          echo "➡️ Adding enhanced tamil.m3u (Tamil group)..."
-          cat tamil.m3u >> "$OUTPUT"
-
-          # Add local.m3u as "Local Channels"
-          echo "➡️ Adding local.m3u as 'Local Channels'..."
-          awk '
-            BEGIN { in_extinf = 0; group = "Local Channels" }
-            /^#EXTINF:/ {
-              in_extinf = 1;
-              line = $0;
-              if (line ~ /group-title=/) {
-                gsub(/group-title="[^"]*"/, "group-title=\"" group "\"", line);
-              } else {
-                sub(/(-1[ \t]+)/, "\\1group-title=\"" group "\" ", line);
-              }
-              print line;
-              next;
-            }
-            in_extinf && /^[^#]/ {
-              print $0;
-              in_extinf = 0;
-              next;
-            }
-            { if (!in_extinf && length($0) > 0) print }
-          ' local.m3u >> "$OUTPUT"
-
-          # Stats
-          TOTAL_TAMIL=$(grep -c '^#EXTINF.*group-title="Tamil"' "$OUTPUT" || echo 0)
-          TOTAL_LOCAL=$(grep -c '^#EXTINF.*group-title="Local Channels"' "$OUTPUT" || echo 0)
-          echo "✅ playlist.m3u created:"
-          echo "   🎯 Tamil (incl. Zee): $TOTAL_TAMIL"
-          echo "   🏠 Local Channels: $TOTAL_LOCAL"
-
-      - name: Commit changes
+      - name: Commit enhanced tamil.m3u
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
-
-          # Stage both updated tamil.m3u and new playlist.m3u
-          git add tamil.m3u playlist.m3u
-
+          git add tamil.m3u
           if git diff --cached --quiet; then
-            echo "➡️ No changes — skipping commit"
+            echo "➡️ No effective change — skipping commit"
             exit 0
           fi
-
-          git commit -m "✨ Enhance: merged zee.m3u → tamil.m3u (Tamil group), + local → playlist.m3u | $(date -u '+%Y-%m-%d %H:%M')"
+          git commit -m "✨ Merged zee.m3u → tamil.m3u (Tamil group)"
           git push origin main
