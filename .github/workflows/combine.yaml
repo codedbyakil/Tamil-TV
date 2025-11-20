@@ -1,0 +1,112 @@
+name: Combine M3U Playlists
+
+permissions:
+  contents: write
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '*/30 * * * *'  # every 30 mins — same as your first workflow
+
+jobs:
+  combine:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout main branch
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Ensure required files exist
+        run: |
+          if [ ! -f tamil.m3u ]; then
+            echo "❌ tamil.m3u not found. Did 'Auto-Update Tamil M3U' run recently?"
+            exit 1
+          fi
+          if [ ! -f zee.m3u ]; then
+            echo "❌ zee.m3u not found. Please upload it to the repo root."
+            exit 1
+          fi
+          if [ ! -f local.m3u ]; then
+            echo "❌ local.m3u not found. Please upload it to the repo root."
+            exit 1
+          fi
+
+      - name: Combine playlists
+        run: |
+          OUTPUT="combined.m3u"
+          echo "#EXTM3U" > "$OUTPUT"
+
+          # 1️⃣ Add tamil.m3u — preserve its existing group-title (e.g., "Tamil")
+          echo "➡️ Adding tamil.m3u..."
+          cat tamil.m3u >> "$OUTPUT"
+
+          # 2️⃣ Add zee.m3u channels into group "Tamil"
+          echo "➡️ Merging zee.m3u into 'Tamil' group..."
+          awk '
+            BEGIN { in_extinf = 0; group = "Tamil" }
+            /^#EXTINF:/ {
+              in_extinf = 1;
+              line = $0;
+              # Replace *any* existing group-title with "Tamil"
+              gsub(/group-title="[^"]*"/, "group-title=\"" group "\"", line);
+              print line;
+              next;
+            }
+            in_extinf && /^[^#]/ {
+              print $0;
+              in_extinf = 0;
+              next;
+            }
+            # Skip other tags (e.g., #EXTVLCOPT, #KODIPROP) unless needed — keep them!
+            /^[^#]/ { in_extinf = 0 }  # reset on URL line (though handled above)
+            { if (!in_extinf && !/^#EXTINF:/ && !/^[ \t]*$/) print }
+          ' zee.m3u >> "$OUTPUT"
+
+          # 3️⃣ Add local.m3u — force group-title to "Local Channels"
+          echo "➡️ Adding local.m3u as 'Local Channels'..."
+          awk '
+            BEGIN { in_extinf = 0; group = "Local Channels" }
+            /^#EXTINF:/ {
+              in_extinf = 1;
+              line = $0;
+              # Insert/replace group-title
+              if (line ~ /group-title=/) {
+                gsub(/group-title="[^"]*"/, "group-title=\"" group "\"", line);
+              } else {
+                # Insert before title (after -1 and optional tvg-* fields)
+                sub(/(-1[ \t]+)(.*)/, "\\1group-title=\"" group "\" \\2", line);
+              }
+              print line;
+              next;
+            }
+            in_extinf && /^[^#]/ {
+              print $0;
+              in_extinf = 0;
+              next;
+            }
+            # Pass through other lines (e.g., #EXTVLCOPT, #KODIPROP, cookies, UA)
+            { if (!in_extinf) print }
+          ' local.m3u >> "$OUTPUT"
+
+          # Final stats
+          TOTAL_TAMIL=$(grep -c '^#EXTINF.*group-title="Tamil"' "$OUTPUT" || echo 0)
+          TOTAL_LOCAL=$(grep -c '^#EXTINF.*group-title="Local Channels"' "$OUTPUT" || echo 0)
+          echo "✅ combined.m3u created:"
+          echo "   🎯 Tamil group: $TOTAL_TAMIL channels"
+          echo "   🏠 Local Channels: $TOTAL_LOCAL channels"
+
+      - name: Commit & Push combined.m3u
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add combined.m3u
+
+          if git diff --cached --quiet; then
+            echo "➡️ No changes in combined.m3u — skipping commit"
+            exit 0
+          fi
+
+          git commit -m "🔄 Auto-combine: tamil + zee (→ Tamil) + local (→ Local Channels) | $(date -u '+%Y-%m-%d %H:%M')"
+          git push origin main
