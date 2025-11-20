@@ -1,121 +1,129 @@
 name: Build main.m3u (Tamil + Zee + Local)
 
-# ✅ Trigger ONLY after your first workflow succeeds
 on:
   workflow_run:
-    workflows: ["Auto-Update Tamil M3U"]   # ← exact name from your first YAML
+    workflows: ["Auto-Update Tamil M3U"]
     types: [completed]
-  workflow_dispatch:   # ← keep this if you want to run manually via UI
+  workflow_dispatch:
 
-# ⚠️ IMPORTANT: workflow_run does NOT grant token permissions automatically
 permissions:
   contents: write
 
 jobs:
   build:
-    # ✅ Only run if the triggering workflow succeeded
     if: ${{ github.event.workflow_run.conclusion == 'success' }}
-
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout repo
+      - name: Checkout
         uses: actions/checkout@v4
         with:
-          # 🔑 Use GITHUB_TOKEN with write access
           token: ${{ secrets.GITHUB_TOKEN }}
           ref: main
 
-      - name: Verify required files
+      - name: Verify files
         run: |
           for f in tamil.m3u zee.m3u local.m3u; do
-            if [ ! -f "$f" ]; then
-              echo "❌ Missing: $f — did 'Auto-Update Tamil M3U' fail to generate tamil.m3u?"
-              exit 1
-            fi
+            [ -f "$f" ] || { echo "❌ $f missing"; exit 1; }
           done
-          echo "✅ All source files present."
+          echo "✅ All files present."
 
-      - name: Normalize line endings & encoding
+      - name: Normalize files
         run: |
           sudo apt-get update && sudo apt-get install -y dos2unix
           for f in tamil.m3u zee.m3u local.m3u; do
-            sed -i '1s/^\xEF\xBB\xBF//' "$f"      # Remove BOM
+            sed -i '1s/^\xEF\xBB\xBF//' "$f"     # Remove BOM
             dos2unix "$f" 2>/dev/null || sed -i 's/\r$//' "$f"
-            sed -i 's/[ \t]*$//' "$f"
+            sed -i 's/[ \t]*$//' "$f"            # Trim trailing space
           done
+
+      - name: 🔍 Debug zee.m3u (first 8 lines)
+        run: |
+          echo "🔍 zee.m3u (first 8 lines, escaped):"
+          head -n 8 zee.m3u | cat -A
 
       - name: Build main.m3u
         run: |
           OUTPUT="main.m3u"
           echo "#EXTM3U x-tvg-url=\"https://iptv-org.github.io/epg/guides/tamil.xml\"" > "$OUTPUT"
 
-          # 1️⃣ tamil.m3u (preserve existing groups)
-          echo "# === tamil.m3u (original) ===" >> "$OUTPUT"
+          # 1️⃣ tamil.m3u — keep as-is (skip #EXTM3U)
+          echo "# === tamil.m3u ===" >> "$OUTPUT"
           awk '
             /^#EXTM3U/ { next }
+            NF == 0 { next }
             { print }
           ' tamil.m3u >> "$OUTPUT"
 
-          # 2️⃣ zee.m3u → Tamil group
+          # 2️⃣ ✅ zee.m3u — robust parsing, force group-title="Tamil", fix #EXTINF:-1
           echo "" >> "$OUTPUT"
-          echo "# === zee.m3u → Tamil group ===" >> "$OUTPUT"
+          echo "# === zee.m3u → Tamil ===" >> "$OUTPUT"
           awk '
-            BEGIN { in_extinf = 0; group = "Tamil" }
-            /^#EXTM3U/ { next }
+            BEGIN { in_extinf = 0; channel_name = ""; }
             /^#EXTINF:/ {
               in_extinf = 1;
-              line = $0;
-              if (line ~ /group-title="[^"]*"/) {
-                gsub(/group-title="[^"]*"/, "group-title=\"" group "\"", line);
+              # Extract everything after the last comma (channel name)
+              i = match($0, /,[^,]*$/);
+              if (i > 0) {
+                channel_name = substr($0, i + 1);
+                gsub(/^[ \t"]+|[ \t"]+$/, "", channel_name);
               } else {
-                sub(/(-1[ \t]+)/, "\\1group-title=\"" group "\" ", line);
+                channel_name = "Zee Channel";
               }
-              print line; next;
+              next;
             }
-            in_extinf && /^[^#]/ { print; in_extinf = 0; next; }
-            !/^#EXTM3U/ && length($0) > 0 { print }
+            in_extinf && /^[^#]/ && length($0) > 0 {
+              url = $0;
+              # ✅ CORRECT FORMAT: #EXTINF:-1 group-title="Tamil",Name
+              print "#EXTINF:-1 group-title=\"Tamil\"," channel_name;
+              print url;
+              in_extinf = 0;
+              channel_name = "";
+              next;
+            }
+            # Skip all other lines (comments, props, cookies — add later if needed)
           ' zee.m3u >> "$OUTPUT"
 
-          # 3️⃣ local.m3u → Local Channels group
+          # 3️⃣ local.m3u — same logic, group="Local Channels"
           echo "" >> "$OUTPUT"
           echo "# === local.m3u → Local Channels ===" >> "$OUTPUT"
           awk '
-            BEGIN { in_extinf = 0; group = "Local Channels" }
-            /^#EXTM3U/ { next }
+            BEGIN { in_extinf = 0; channel_name = ""; }
             /^#EXTINF:/ {
               in_extinf = 1;
-              line = $0;
-              if (line ~ /group-title="[^"]*"/) {
-                gsub(/group-title="[^"]*"/, "group-title=\"" group "\"", line);
+              i = match($0, /,[^,]*$/);
+              if (i > 0) {
+                channel_name = substr($0, i + 1);
+                gsub(/^[ \t"]+|[ \t"]+$/, "", channel_name);
               } else {
-                sub(/(-1[ \t]+)/, "\\1group-title=\"" group "\" ", line);
+                channel_name = "Local Channel";
               }
-              print line; next;
+              next;
             }
-            in_extinf && /^[^#]/ { print; in_extinf = 0; next; }
-            !/^#EXTM3U/ && length($0) > 0 { print }
+            in_extinf && /^[^#]/ && length($0) > 0 {
+              url = $0;
+              print "#EXTINF:-1 group-title=\"Local Channels\"," channel_name;
+              print url;
+              in_extinf = 0;
+              channel_name = "";
+              next;
+            }
           ' local.m3u >> "$OUTPUT"
 
           # Stats
-          TAMIL=$(grep -c '^#EXTINF.*group-title="Tamil"' "$OUTPUT")
-          LOCAL=$(grep -c '^#EXTINF.*group-title="Local Channels"' "$OUTPUT")
-          TOTAL=$(grep -c '^#EXTINF' "$OUTPUT")
+          TAMIL=$(grep -c '^#EXTINF:-1 group-title="Tamil"' "$OUTPUT" || echo 0)
+          LOCAL=$(grep -c '^#EXTINF:-1 group-title="Local Channels"' "$OUTPUT" || echo 0)
           echo "✅ main.m3u built:"
           echo "   🎯 Tamil (tamil + zee): $TAMIL"
           echo "   🏠 Local Channels: $LOCAL"
-          echo "   📺 Total: $TOTAL"
 
       - name: Commit main.m3u
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
-
           git add main.m3u
-
           if git diff --cached --quiet; then
-            echo "➡️ No change in main.m3u — skipping commit"
+            echo "➡️ No change — skipping commit"
             exit 0
           fi
-
-          git commit -m "📺 main.m3u: $TAMIL Tamil + $LOCAL Local | $(date -u '+%Y-%m-%d %H:%M')"
+          git commit -m "📺 main.m3u: $TAMIL Tamil + $LOCAL Local"
           git push origin main
