@@ -1,4 +1,4 @@
-name: Build main.m3u (Tamil + Zee + Local)
+name: Build main.m3u (Tamil + Zee + Local) with Channel Numbers & Sorting
 
 on:
   workflow_run:
@@ -23,151 +23,339 @@ jobs:
       - name: Verify files
         run: |
           for f in tamil.m3u zee.m3u local.m3u; do
-            if [ ! -f "$f" ]; then
-              echo "❌ $f missing — aborting"
-              exit 1
-            fi
+            [ -f "$f" ] || { echo "❌ $f missing"; exit 1; }
           done
-          echo "✅ All required files present."
+          echo "✅ All files present."
 
-      - name: Normalize line endings & clean BOM
+      - name: Normalize files
         run: |
           sudo apt-get update && sudo apt-get install -y dos2unix
           for f in tamil.m3u zee.m3u local.m3u; do
-            sed -i '1s/^\xEF\xBB\xBF//' "$f"      # Remove UTF-8 BOM
-            dos2unix "$f" 2>/dev/null || sed -i 's/\r$//' "$f"  # CRLF → LF
-            sed -i 's/[ \t]*$//' "$f"             # Trim trailing whitespace
+            sed -i '1s/^\xEF\xBB\xBF//' "$f"
+            dos2unix "$f" 2>/dev/null || sed -i 's/\r$//' "$f"
+            sed -i 's/[ \t]*$//' "$f"
           done
 
-      - name: 🔍 Debug zee.m3u (structure check)
-        run: |
-          echo "🔍 Sample of zee.m3u (first 12 lines, escaped):"
-          head -n 12 zee.m3u | cat -A
-
-      - name: Build main.m3u
+      - name: Build main.m3u with sorting & numbering
         run: |
           OUTPUT="main.m3u"
           echo "#EXTM3U x-tvg-url=\"https://iptv-org.github.io/epg/guides/tamil.xml\"" > "$OUTPUT"
 
-          # 1️⃣ tamil.m3u — pass-through (skip #EXTM3U)
-          echo "# === tamil.m3u ===" >> "$OUTPUT"
+          # === 1. Extract ALL Tamil-category channels (from tamil.m3u + zee.m3u) ===
+          echo "# === Tamil Channels (Sorted & Numbered) ===" >> "$OUTPUT"
+
+          # Create temp files
+          TMP_DIR=$(mktemp -d)
+          TAMIL_RAW="$TMP_DIR/tamil_raw.txt"
+          ZEE_RAW="$TMP_DIR/zee_raw.txt"
+          ALL_TAMIL="$TMP_DIR/all_tamil.txt"
+
+          # Extract blocks from tamil.m3u (skip #EXTM3U)
           awk '
             /^#EXTM3U/ { next }
-            NF == 0 { next }
-            { print }
-          ' tamil.m3u >> "$OUTPUT"
+            /^#EXTINF/ {
+              block = $0 "\n"; in_block = 1; next;
+            }
+            in_block && NF == 0 { next }  # skip blank lines inside?
+            in_block {
+              block = block $0 "\n";
+              if (/^[ \t]*http/) in_block = 0;
+            }
+            !in_block && block != "" {
+              print "---CHANNEL---";
+              printf "%s", block;
+              block = "";
+            }
+            END { if (block != "") { print "---CHANNEL---"; printf "%s", block; } }
+          ' tamil.m3u > "$TAMIL_RAW"
 
-          # 2️⃣ ✅ zee.m3u — Preserve logos & attributes; force group-title="Tamil"
-          echo "" >> "$OUTPUT"
-          echo "# === zee.m3u → Tamil (logos preserved) ===" >> "$OUTPUT"
+          # Extract blocks from zee.m3u
           awk '
-            BEGIN { in_extinf = 0; extinf_line = ""; }
+            /^#EXTINF/ {
+              block = $0 "\n"; in_block = 1; next;
+            }
+            in_block && NF == 0 { next }
+            in_block {
+              block = block $0 "\n";
+              if (/^[ \t]*http/) in_block = 0;
+            }
+            !in_block && block != "" {
+              print "---CHANNEL---";
+              printf "%s", block;
+              block = "";
+            }
+            END { if (block != "") { print "---CHANNEL---"; printf "%s", block; } }
+          ' zee.m3u > "$ZEE_RAW"
 
-            /^#EXTINF:/ {
-              in_extinf = 1;
-              extinf_line = $0;
-              next;
+          # Combine
+          cat "$TAMIL_RAW" "$ZEE_RAW" > "$ALL_TAMIL"
+
+          # === 2. Define priority list (normalized) ===
+          # We'll match using: lower, trim, remove "hd", "tamil", "tamil hd", etc.
+          cat > "$TMP_DIR/priority.txt" <<'EOF'
+sun tv
+ktv
+star vijay
+zee tamil
+colors tamil
+polimer tv
+kalaignar tv
+vijay super
+zee thirai
+sun life
+adithya tv
+sun music
+jaya tv
+jaya plus
+jaya max
+j movies
+raj tv
+vasanth tv
+d tamil
+history hd
+disney
+hungama
+cartoon network
+pogo
+sonic
+disney junior
+super hungama
+discovery kids
+EOF
+
+          # === 3. Sort & Number Tamil Channels ===
+          # Script to parse, normalize name, match priority, assign number
+          awk -v priority_file="$TMP_DIR/priority.txt" '
+            BEGIN {
+              # Load priority list
+              prio_count = 0;
+              while ((getline line < priority_file) > 0) {
+                gsub(/^[ \t]+|[ \t]+$/, "", line);
+                line = tolower(line);
+                prio[line] = ++prio_count;
+              }
+              close(priority_file);
             }
 
-            in_extinf && /^[ \t]*http/ {
-              url = $0;
-              gsub(/^[ \t]+|[ \t]+$/, "", url);
-              if (length(url) == 0) { next; }
+            /^---CHANNEL---/ {
+              if (block != "") process_block(block);
+              block = "";
+              next;
+            }
+            { block = (block == "" ? $0 : block "\n" $0); }
+            END { if (block != "") process_block(block); }
 
-              # ✅ Preserve all attributes, but ensure group-title="Tamil"
-              # Remove existing group-title if any, then add ours at end
-              gsub(/group-title="[^"]*"/, "", extinf_line);
-              gsub(/group-title=[^, \t]*/, "", extinf_line);  # no quotes variant
-              
-              # Ensure no trailing space before comma
-              gsub(/ +,/, ",", extinf_line);
-              
-              # Inject group-title="Tamil" before the final comma+name part
-              # Match: everything up to the final comma (channel name separator)
-              if (match(extinf_line, /,[^,]*$/)) {
-                prefix = substr(extinf_line, 1, RSTART - 1);
-                suffix = substr(extinf_line, RSTART);
-                # Insert group-title at end of attributes (before comma)
-                new_extinf = prefix " group-title=\"Tamil\"" suffix;
-                print new_extinf;
-                print url;
+            function normalize_name(extinf_line,    name_part, clean) {
+              # Extract display name: after last comma
+              match(extinf_line, /,[^,]*$/);
+              if (RSTART > 0) {
+                name_part = substr(extinf_line, RSTART + 1);
               } else {
-                # Fallback: append group-title before comma
-                print extinf_line " group-title=\"Tamil\"";
-                print url;
+                name_part = "Unknown";
+              }
+              gsub(/^[ \t"'\''"]+|[ \t"'\''"]+$/, "", name_part);
+              # Normalize: lower, remove HD/Tamil/etc.
+              clean = tolower(name_part);
+              gsub(/ hd$/, "", clean);
+              gsub(/ hd | hd$/, " ", clean);
+              gsub(/ tamil$/, "", clean);
+              gsub(/ tamil hd$/, "", clean);
+              gsub(/ tv hd$/, " tv", clean);
+              gsub(/ tv$/, "", clean);  # optional: keep "tv" for disambiguation?
+              gsub(/  +/, " ", clean);
+              gsub(/^[ \t]+|[ \t]+$/, "", clean);
+              return clean;
+            }
+
+            function process_block(blk,    lines, n, extinf_idx, extinf_line, norm_name, prio_rank, new_extinf, name_part, url) {
+              n = split(blk, lines, /\n/);
+              extinf_idx = -1;
+              for (i = 1; i <= n; i++) {
+                if (lines[i] ~ /^#EXTINF:/) {
+                  extinf_idx = i;
+                  extinf_line = lines[i];
+                  break;
+                }
+              }
+              if (extinf_idx == -1) return;
+
+              norm_name = normalize_name(extinf_line);
+              prio_rank = prio[norm_name];
+
+              # Extract original name for display (before comma)
+              match(extinf_line, /,[^,]*$/);
+              if (RSTART > 0) {
+                prefix = substr(extinf_line, 1, RSTART - 1);
+                name_part = substr(extinf_line, RSTART + 1);
+                gsub(/^[ \t"'\''"]+|[ \t"'\''"]+$/, "", name_part);
+              } else {
+                prefix = extinf_line;
+                name_part = "Unknown";
               }
 
-              in_extinf = 0;
-              extinf_line = "";
-              next;
+              # Assign channel number later (we need full list first)
+              # Store: [prio_rank, norm_name, original_name, extinf_prefix, full_block]
+              blocks[++block_count] = prio_rank SUBSEP norm_name SUBSEP name_part SUBSEP prefix SUBSEP blk;
             }
+          ' "$ALL_TAMIL" > "$TMP_DIR/unsorted_tamil.txt"
 
-            # Skip non-matching lines (comments, props, blank lines)
-            { next; }
-          ' zee.m3u >> "$OUTPUT"
-
-          # 3️⃣ local.m3u — group-title="Local Channels", preserve logos
-          echo "" >> "$OUTPUT"
-          echo "# === local.m3u → Local Channels (logos preserved) ===" >> "$OUTPUT"
+          # Now sort & assign numbers
           awk '
-            BEGIN { in_extinf = 0; extinf_line = ""; }
-
-            /^#EXTINF:/ {
-              in_extinf = 1;
-              extinf_line = $0;
-              next;
+            BEGIN {
+              FS = SUBSEP;
+              block_count = 0;
             }
-
-            in_extinf && /^[ \t]*http/ {
-              url = $0;
-              gsub(/^[ \t]+|[ \t]+$/, "", url);
-              if (length(url) == 0) { next; }
-
-              gsub(/group-title="[^"]*"/, "", extinf_line);
-              gsub(/group-title=[^, \t]*/, "", extinf_line);
-              gsub(/ +,/, ",", extinf_line);
-
-              if (match(extinf_line, /,[^,]*$/)) {
-                prefix = substr(extinf_line, 1, RSTART - 1);
-                suffix = substr(extinf_line, RSTART);
-                new_extinf = prefix " group-title=\"Local Channels\"" suffix;
-                print new_extinf;
-                print url;
-              } else {
-                print extinf_line " group-title=\"Local Channels\"";
-                print url;
+            {
+              blocks[++block_count] = $0;
+              ranks[block_count] = ($1 == "") ? 9999 : ($1 + 0);
+              names[block_count] = $2;
+            }
+            END {
+              # Sort by rank (numeric), then by norm_name
+              for (i = 1; i <= block_count; i++) {
+                for (j = i + 1; j <= block_count; j++) {
+                  if (ranks[i] > ranks[j] || (ranks[i] == ranks[j] && names[i] > names[j])) {
+                    # swap
+                    tmp = blocks[i]; blocks[i] = blocks[j]; blocks[j] = tmp;
+                    tmp = ranks[i]; ranks[i] = ranks[j]; ranks[j] = tmp;
+                    tmp = names[i]; names[i] = names[j]; names[j] = tmp;
+                  }
+                }
               }
 
-              in_extinf = 0;
-              extinf_line = "";
-              next;
+              chno = 1;
+              for (i = 1; i <= block_count; i++) {
+                split(blocks[i], f, SUBSEP);
+                prio_rank = f[1];
+                norm_name = f[2];
+                orig_name = f[3];
+                prefix = f[4];
+                blk = f[5];
+
+                # Rebuild #EXTINF: inject tvg-chno and optionally prepend "#N "
+                # Remove existing tvg-chno if any
+                gsub(/tvg-chno="[^"]*"/, "", prefix);
+                gsub(/tvg-chno=[^, \t]*/, "", prefix);
+                # Ensure space before comma
+                gsub(/ +,/, ",", prefix);
+
+                # Option A: prepend "#1 " to display name (visible in players)
+                # new_name = "#" chno " " orig_name;
+                # Option B: only use tvg-chno (cleaner)
+                new_name = orig_name;
+
+                new_extinf = prefix " tvg-chno=\"" chno "\"";
+                # Insert before comma
+                if (match(new_extinf, /,[^,]*$/)) {
+                  pre = substr(new_extinf, 1, RSTART - 1);
+                  suf = substr(new_extinf, RSTART);
+                  new_extinf = pre suf;
+                } else {
+                  new_extinf = new_extinf ",";
+                }
+                # Fix double comma or missing comma
+                gsub(/, +,/, ",", new_extinf);
+                if (new_extinf !~ /,/) new_extinf = new_extinf ",";
+                # Ensure exactly one comma before name
+                new_extinf = gensub(/(.*),[^,]*$/, "\\1," new_name, 1, new_extinf);
+
+                # Replace old EXTINF with new one
+                gsub(/^#EXTINF:[^\n]*/, new_extinf, blk);
+                printf "%s\n", blk;
+
+                chno++;
+              }
             }
-            { next; }
+          ' "$TMP_DIR/unsorted_tamil.txt" >> "$OUTPUT"
+
+          # === 4. Process local.m3u → sort alphabetically by channel name ===
+          echo "" >> "$OUTPUT"
+          echo "# === Local Channels (A→Z) ===" >> "$OUTPUT"
+
+          awk '
+            BEGIN { block = ""; chno = 1; }
+            /^#EXTINF/ {
+              if (block != "") blocks[block_count++] = block;
+              block = $0 "\n"; next;
+            }
+            block != "" {
+              block = block $0 "\n";
+              if (/^[ \t]*http/) {
+                blocks[block_count++] = block;
+                block = "";
+              }
+            }
+            END { if (block != "") blocks[block_count++] = block; }
+
+            function get_name(extinf,    name_part) {
+              match(extinf, /,[^,]*$/);
+              if (RSTART > 0) {
+                name_part = substr(extinf, RSTART + 1);
+                gsub(/^[ \t"'\''"]+|[ \t"'\''"]+$/, "", name_part);
+                return tolower(name_part);
+              }
+              return "zzz";
+            }
+
+            END {
+              # Extract names and sort indices
+              for (i = 0; i < block_count; i++) {
+                match(blocks[i], /^#EXTINF:[^\n]*/);
+                extinf = substr(blocks[i], 1, RLENGTH);
+                names[i] = get_name(extinf);
+                idx[i] = i;
+              }
+              # Simple bubble sort by name
+              for (i = 0; i < block_count; i++) {
+                for (j = i + 1; j < block_count; j++) {
+                  if (names[idx[i]] > names[idx[j]]) {
+                    tmp = idx[i]; idx[i] = idx[j]; idx[j] = tmp;
+                  }
+                }
+              }
+              for (i = 0; i < block_count; i++) {
+                blk = blocks[idx[i]];
+                # Inject tvg-chno (optional, e.g., L1, L2… or just skip)
+                match(blk, /^#EXTINF:[^\n]*/);
+                extinf = substr(blk, 1, RLENGTH);
+                gsub(/tvg-chno="[^"]*"/, "", extinf);
+                gsub(/tvg-chno=[^, \t]*/, "", extinf);
+                gsub(/ +,/, ",", extinf);
+                new_extinf = extinf " tvg-chno=\"L" chno "\"";
+                if (match(new_extinf, /,[^,]*$/)) {
+                  pre = substr(new_extinf, 1, RSTART - 1);
+                  suf = substr(new_extinf, RSTART);
+                  new_extinf = pre suf;
+                } else {
+                  new_extinf = new_extinf ",";
+                }
+                gsub(/^#EXTINF:[^\n]*/, new_extinf, blk);
+                printf "%s", blk;
+                chno++;
+              }
+            }
           ' local.m3u >> "$OUTPUT"
 
-          # 📊 Stats
-          TAMIL=$(grep -c '^#EXTINF:-1.*group-title="Tamil"' "$OUTPUT" 2>/dev/null || echo 0)
-          LOCAL=$(grep -c '^#EXTINF:-1.*group-title="Local Channels"' "$OUTPUT" 2>/dev/null || echo 0)
-          TOTAL=$((TAMIL + LOCAL))
-          echo "✅ main.m3u built with $TOTAL channels:"
-          echo "   🎯 Tamil (incl. Zee): $TAMIL"
-          echo "   🏠 Local Channels: $LOCAL"
+          # === Stats ===
+          TAMIL=$(awk '/group-title="Tamil"/ && /^#EXTINF/ { c++ } END { print c+0 }' "$OUTPUT")
+          LOCAL=$(awk '/group-title="Local Channels"/ && /^#EXTINF/ { c++ } END { print c+0 }' "$OUTPUT")
+          echo "✅ main.m3u built:"
+          echo "   📺 Tamil (numbered & sorted): $TAMIL"
+          echo "   📺 Local (A→Z sorted): $LOCAL"
 
-          # Optional: show first few Zee entries
-          echo ""
-          echo "📌 First 3 Zee-derived entries:"
-          awk '/# === zee\.m3u/,/# === local\.m3u/ { if (/^#EXTINF/ || /^http/) print "  " $0 }' "$OUTPUT" | head -n 6
+          # Cleanup
+          rm -rf "$TMP_DIR"
 
       - name: Commit main.m3u
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add main.m3u
-
           if git diff --cached --quiet; then
             echo "➡️ No changes — skipping commit"
             exit 0
           fi
-
-          git commit -m "📺 main.m3u: $TAMIL Tamil (incl. Zee w/ logos) + $LOCAL Local"
+          TAMIL=$(awk '/group-title="Tamil"/ && /^#EXTINF/ { c++ } END { print c+0 }' main.m3u)
+          LOCAL=$(awk '/group-title="Local Channels"/ && /^#EXTINF/ { c++ } END { print c+0 }' main.m3u)
+          git commit -m "📺 main.m3u: $TAMIL Tamil (#1–#${TAMIL}) + $LOCAL Local (A→Z)"
           git push origin main
