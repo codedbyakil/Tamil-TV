@@ -42,13 +42,11 @@ jobs:
           echo "#EXTM3U x-tvg-url=\"https://iptv-org.github.io/epg/guides/tamil.xml\"" > "$OUTPUT"
           TMP=$(mktemp -d)
 
-          # === Step 1: Extract all Tamil-category blocks (tamil.m3u + zee.m3u) ===
-          {
-            awk '/^#EXTINF:/ {f=1;block=$0;next} f {block=block"\n"$0} /^[ \t]*http/ {f=0;print "---BLOCK---\n"block; block=""}' tamil.m3u
-            awk '/^#EXTINF:/ {f=1;block=$0;next} f {block=block"\n"$0} /^[ \t]*http/ {f=0;print "---BLOCK---\n"block; block=""}' zee.m3u
-          } > "$TMP/tamil_blocks.txt"
+          # Extract Tamil-category blocks from tamil.m3u and zee.m3u
+          awk '/^#EXTINF:/ {f=1;block=$0;next} f {block=block"\n"$0} /^[ \t]*http/ {f=0;print "---BLOCK---\n"block; block=""}' tamil.m3u > "$TMP/tamil_blocks.txt"
+          awk '/^#EXTINF:/ {f=1;block=$0;next} f {block=block"\n"$0} /^[ \t]*http/ {f=0;print "---BLOCK---\n"block; block=""}' zee.m3u >> "$TMP/tamil_blocks.txt"
 
-          # === Step 2: Priority list (simple keys) ===
+          # Priority list (simple keys)
           cat > "$TMP/priority_simple.txt" <<'EOF'
 sun tv
 ktv
@@ -80,16 +78,14 @@ super hungama
 discovery kids
 EOF
 
-          # === Step 3: Sort & Number ===
+          # Sort & Number
           awk -v prio="$TMP/priority_simple.txt" '
             function norm(s,    t) {
               t = tolower(s);
               gsub(/[^a-z0-9]/, "", t);
               return t;
             }
-
             BEGIN {
-              # Load priority keys → index
               while ((getline line < prio) > 0) {
                 gsub(/^[ \t]+|[ \t]+$/, "", line);
                 if (line == "") continue;
@@ -98,15 +94,13 @@ EOF
               }
               close(prio);
             }
-
             /^---BLOCK---/ {
               if (block != "") process(block);
               block = ""; next;
             }
             { block = (block == "" ? $0 : block "\n" $0); }
             END { if (block != "") process(block); }
-
-            function process(blk,    lines, n, extinf, name_raw, name_norm, i) {
+            function process(blk,    lines, n, extinf, name_raw, name_norm, i, key) {
               n = split(blk, lines, /\n/);
               for (i = 1; i <= n; i++) {
                 if (lines[i] ~ /^#EXTINF:/) {
@@ -122,25 +116,16 @@ EOF
                 }
               }
               if (!extinf) return;
-
               name_norm = norm(name_raw);
-              found = 0;
               for (key in prio_idx) {
-                # Try fuzzy match: if key is substring of name_norm (e.g., "zeetamil" in "zeetamilhd")
-                if (index(name_norm, key) == 1 || index(name_norm, key) > 0) {
-                  # Prefer exact or prefix match
-                  if (name_norm == key || index(name_norm, key) == 1) {
-                    bucket[key] = (bucket[key] ? bucket[key] "\n---\n" : "") blk;
-                    found = 1;
-                    break;
-                  }
+                if (name_norm == key || index(name_norm, key) == 1) {
+                  bucket[key] = (bucket[key] ? bucket[key] "\n---\n" : "") blk;
+                  return;
                 }
               }
-              if (!found) unsorted = (unsorted ? unsorted "\n---\n" : "") blk;
+              unsorted = (unsorted ? unsorted "\n---\n" : "") blk;
             }
-
             END {
-              # Output in priority order
               chno = 1;
               while ((getline line < prio) > 0) {
                 gsub(/^[ \t]+|[ \t]+$/, "", line);
@@ -157,7 +142,6 @@ EOF
                   }
                 }
               }
-              # Append unmatched
               if (unsorted != "") {
                 n = split(unsorted, arr, /---\n/);
                 for (i = 1; i <= n; i++) {
@@ -169,7 +153,6 @@ EOF
                 }
               }
             }
-
             function output_block(blk, num,    lines, n, i) {
               n = split(blk, lines, /\n/);
               for (i = 1; i <= n; i++) {
@@ -190,17 +173,16 @@ EOF
             }
           ' "$TMP/tamil_blocks.txt" >> "$OUTPUT"
 
-          # === Step 4: Local channels (A→Z) ===
+          # Local channels (A→Z)
           echo "# === Local Channels (A→Z) ===" >> "$OUTPUT"
           awk '
-            BEGIN { block = ""; }
+            BEGIN { block = ""; cnt = 0; }
             /^#EXTINF:/ { if (block) blocks[++cnt]=block; block=$0; next }
             block { block = block "\n" $0 }
             /^[ \t]*http/ { in_url = 1 }
             in_url && /^[^ \t#]/ { in_url = 0 }
             END { if (block) blocks[++cnt]=block }
-
-            function name_key(b,    lines, n, i, s) {
+            function get_name(b,    lines, n, i, s) {
               n = split(b, lines, /\n/);
               for (i=1; i<=n; i++) if (lines[i] ~ /^#EXTINF:/) {
                 match(lines[i], /,[^,]*$/);
@@ -212,9 +194,8 @@ EOF
               }
               return "zzz";
             }
-
             END {
-              for (i=1; i<=cnt; i++) keys[i]=name_key(blocks[i]);
+              for (i=1; i<=cnt; i++) keys[i]=get_name(blocks[i]);
               for (i=1; i<=cnt; i++) idx[i]=i;
               for (i=1; i<=cnt; i++) for (j=i+1; j<=cnt; j++)
                 if (keys[idx[i]] > keys[idx[j]]) {
