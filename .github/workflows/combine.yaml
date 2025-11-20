@@ -1,4 +1,4 @@
-name: Build main.m3u (Tamil + Zee + Local) — Correct Order & Names
+name: Build main.m3u (Tamil + Zee + Local)
 
 on:
   workflow_run:
@@ -23,214 +23,130 @@ jobs:
       - name: Verify files
         run: |
           for f in tamil.m3u zee.m3u local.m3u; do
-            [ -f "$f" ] || { echo "❌ $f missing"; exit 1; }
+            if [ ! -f "$f" ]; then
+              echo "❌ $f missing — aborting"
+              exit 1
+            fi
           done
-          echo "✅ All files present."
-
-      - name: Normalize files
+          echo "✅ All required files present."
+      - name: Normalize line endings & clean BOM
         run: |
           sudo apt-get update && sudo apt-get install -y dos2unix
           for f in tamil.m3u zee.m3u local.m3u; do
-            sed -i '1s/^\xEF\xBB\xBF//' "$f"
-            dos2unix "$f" 2>/dev/null || sed -i 's/\r$//' "$f"
-            sed -i 's/[ \t]*$//' "$f"
+            sed -i '1s/^\xEF\xBB\xBF//' "$f"      # Remove UTF-8 BOM
+            dos2unix "$f" 2>/dev/null || sed -i 's/\r$//' "$f"  # CRLF → LF
+            sed -i 's/[ \t]*$//' "$f"             # Trim trailing whitespace
           done
-
-      - name: Build main.m3u with exact priority order
+      - name: 🔍 Debug zee.m3u (structure check)
+        run: |
+          echo "🔍 Sample of zee.m3u (first 12 lines, escaped):"
+          head -n 12 zee.m3u | cat -A
+      - name: Build main.m3u
         run: |
           OUTPUT="main.m3u"
           echo "#EXTM3U x-tvg-url=\"https://iptv-org.github.io/epg/guides/tamil.xml\"" > "$OUTPUT"
-          TMP=$(mktemp -d)
-
-          # Extract Tamil-category blocks from tamil.m3u and zee.m3u
-          awk '/^#EXTINF:/ {f=1;block=$0;next} f {block=block"\n"$0} /^[ \t]*http/ {f=0;print "---BLOCK---\n"block; block=""}' tamil.m3u > "$TMP/tamil_blocks.txt"
-          awk '/^#EXTINF:/ {f=1;block=$0;next} f {block=block"\n"$0} /^[ \t]*http/ {f=0;print "---BLOCK---\n"block; block=""}' zee.m3u >> "$TMP/tamil_blocks.txt"
-
-          # Priority list (simple keys)
-          cat > "$TMP/priority_simple.txt" <<'EOF'
-sun tv
-ktv
-star vijay
-zee tamil
-colors tamil
-polimer tv
-kalaignar tv
-vijay super
-zee Thirai
-sun life
-adithya tv
-sun music
-jaya tv
-jaya plus
-jaya max
-j movies
-raj tv
-vasanth tv
-d tamil
-history hd
-disney
-hungama
-cartoon network
-pogo
-sonic
-disney junior
-super hungama
-discovery kids
-EOF
-
-          # Sort & Number
-          awk -v prio="$TMP/priority_simple.txt" '
-            function norm(s,    t) {
-              t = tolower(s);
-              gsub(/[^a-z0-9]/, "", t);
-              return t;
-            }
-            BEGIN {
-              while ((getline line < prio) > 0) {
-                gsub(/^[ \t]+|[ \t]+$/, "", line);
-                if (line == "") continue;
-                key = norm(line);
-                prio_idx[key] = ++n;
-              }
-              close(prio);
-            }
-            /^---BLOCK---/ {
-              if (block != "") process(block);
-              block = ""; next;
-            }
-            { block = (block == "" ? $0 : block "\n" $0); }
-            END { if (block != "") process(block); }
-            function process(blk,    lines, n, extinf, name_raw, name_norm, i, key) {
-              n = split(blk, lines, /\n/);
-              for (i = 1; i <= n; i++) {
-                if (lines[i] ~ /^#EXTINF:/) {
-                  extinf = lines[i];
-                  match(extinf, /,[^,]*$/);
-                  if (RSTART > 0) {
-                    name_raw = substr(extinf, RSTART + 1);
-                    gsub(/^[ \t"'\''"]+|[ \t"'\''"]+$/, "", name_raw);
-                  } else {
-                    name_raw = "Unknown";
-                  }
-                  break;
-                }
-              }
-              if (!extinf) return;
-              name_norm = norm(name_raw);
-              for (key in prio_idx) {
-                if (name_norm == key || index(name_norm, key) == 1) {
-                  bucket[key] = (bucket[key] ? bucket[key] "\n---\n" : "") blk;
-                  return;
-                }
-              }
-              unsorted = (unsorted ? unsorted "\n---\n" : "") blk;
-            }
-            END {
-              chno = 1;
-              while ((getline line < prio) > 0) {
-                gsub(/^[ \t]+|[ \t]+$/, "", line);
-                if (line == "") continue;
-                key = norm(line);
-                if (key in bucket) {
-                  n = split(bucket[key], arr, /---\n/);
-                  for (i = 1; i <= n; i++) {
-                    gsub(/^\n+/, "", arr[i]);
-                    if (arr[i] != "") {
-                      output_block(arr[i], chno);
-                      chno++;
-                    }
-                  }
-                }
-              }
-              if (unsorted != "") {
-                n = split(unsorted, arr, /---\n/);
-                for (i = 1; i <= n; i++) {
-                  gsub(/^\n+/, "", arr[i]);
-                  if (arr[i] != "") {
-                    output_block(arr[i], chno);
-                    chno++;
-                  }
-                }
-              }
-            }
-            function output_block(blk, num,    lines, n, i) {
-              n = split(blk, lines, /\n/);
-              for (i = 1; i <= n; i++) {
-                if (lines[i] ~ /^#EXTINF:/) {
-                  gsub(/tvg-chno="[^"]*"/, "", lines[i]);
-                  gsub(/tvg-chno=[^, \t]*/, "", lines[i]);
-                  if (match(lines[i], /,[^,]*$/)) {
-                    pre = substr(lines[i], 1, RSTART - 1);
-                    suf = substr(lines[i], RSTART);
-                    lines[i] = pre " tvg-chno=\"" num "\"" suf;
-                  } else {
-                    lines[i] = lines[i] " tvg-chno=\"" num "\"";
-                  }
-                }
-                print lines[i];
-              }
-              print "";
-            }
-          ' "$TMP/tamil_blocks.txt" >> "$OUTPUT"
-
-          # Local channels (A→Z)
-          echo "# === Local Channels (A→Z) ===" >> "$OUTPUT"
+          # 1️⃣ tamil.m3u — pass-through (skip #EXTM3U)
+          echo "# === tamil.m3u ===" >> "$OUTPUT"
           awk '
-            BEGIN { block = ""; cnt = 0; }
-            /^#EXTINF:/ { if (block) blocks[++cnt]=block; block=$0; next }
-            block { block = block "\n" $0 }
-            /^[ \t]*http/ { in_url = 1 }
-            in_url && /^[^ \t#]/ { in_url = 0 }
-            END { if (block) blocks[++cnt]=block }
-            function get_name(b,    lines, n, i, s) {
-              n = split(b, lines, /\n/);
-              for (i=1; i<=n; i++) if (lines[i] ~ /^#EXTINF:/) {
-                match(lines[i], /,[^,]*$/);
-                if (RSTART>0) {
-                  s = substr(lines[i], RSTART+1);
-                  gsub(/^[ \t"'\''"]+|[ \t"'\''"]+$/, "", s);
-                  return tolower(s);
-                }
-              }
-              return "zzz";
+            /^#EXTM3U/ { next }
+            NF == 0 { next }
+            { print }
+          ' tamil.m3u >> "$OUTPUT"
+          # 2️⃣ ✅ zee.m3u — Preserve logos & attributes; force group-title="Tamil"
+          echo "" >> "$OUTPUT"
+          echo "# === zee.m3u → Tamil (logos preserved) ===" >> "$OUTPUT"
+          awk '
+            BEGIN { in_extinf = 0; extinf_line = ""; }
+            /^#EXTINF:/ {
+              in_extinf = 1;
+              extinf_line = $0;
+              next;
             }
-            END {
-              for (i=1; i<=cnt; i++) keys[i]=get_name(blocks[i]);
-              for (i=1; i<=cnt; i++) idx[i]=i;
-              for (i=1; i<=cnt; i++) for (j=i+1; j<=cnt; j++)
-                if (keys[idx[i]] > keys[idx[j]]) {
-                  tmp=idx[i]; idx[i]=idx[j]; idx[j]=tmp;
-                }
-              for (i=1; i<=cnt; i++) {
-                b = blocks[idx[i]];
-                gsub(/tvg-chno="[^"]*"/, "", b);
-                gsub(/tvg-chno=[^, \t]*/, "", b);
-                if (match(b, /^#EXTINF:[^\n]*/)) {
-                  pre = substr(b, 1, RSTART+RLENGTH-1);
-                  rest = substr(b, RSTART+RLENGTH);
-                  b = pre " tvg-chno=\"L" i "\"" rest;
-                }
-                print b "\n";
+            in_extinf && /^[ \t]*http/ {
+              url = $0;
+              gsub(/^[ \t]+|[ \t]+$/, "", url);
+              if (length(url) == 0) { next; }
+              # ✅ Preserve all attributes, but ensure group-title="Tamil"
+              # Remove existing group-title if any, then add ours at end
+              gsub(/group-title="[^"]*"/, "", extinf_line);
+              gsub(/group-title=[^, \t]*/, "", extinf_line);  # no quotes variant
+              
+              # Ensure no trailing space before comma
+              gsub(/ +,/, ",", extinf_line);
+              
+              # Inject group-title="Tamil" before the final comma+name part
+              # Match: everything up to the final comma (channel name separator)
+              if (match(extinf_line, /,[^,]*$/)) {
+                prefix = substr(extinf_line, 1, RSTART - 1);
+                suffix = substr(extinf_line, RSTART);
+                # Insert group-title at end of attributes (before comma)
+                new_extinf = prefix " group-title=\"Tamil\"" suffix;
+                print new_extinf;
+                print url;
+              } else {
+                # Fallback: append group-title before comma
+                print extinf_line " group-title=\"Tamil\"";
+                print url;
               }
+              in_extinf = 0;
+              extinf_line = "";
+              next;
             }
+            # Skip non-matching lines (comments, props, blank lines)
+            { next; }
+          ' zee.m3u >> "$OUTPUT"
+          # 3️⃣ local.m3u — group-title="Local Channels", preserve logos
+          echo "" >> "$OUTPUT"
+          echo "# === local.m3u → Local Channels (logos preserved) ===" >> "$OUTPUT"
+          awk '
+            BEGIN { in_extinf = 0; extinf_line = ""; }
+            /^#EXTINF:/ {
+              in_extinf = 1;
+              extinf_line = $0;
+              next;
+            }
+            in_extinf && /^[ \t]*http/ {
+              url = $0;
+              gsub(/^[ \t]+|[ \t]+$/, "", url);
+              if (length(url) == 0) { next; }
+              gsub(/group-title="[^"]*"/, "", extinf_line);
+              gsub(/group-title=[^, \t]*/, "", extinf_line);
+              gsub(/ +,/, ",", extinf_line);
+              if (match(extinf_line, /,[^,]*$/)) {
+                prefix = substr(extinf_line, 1, RSTART - 1);
+                suffix = substr(extinf_line, RSTART);
+                new_extinf = prefix " group-title=\"Local Channels\"" suffix;
+                print new_extinf;
+                print url;
+              } else {
+                print extinf_line " group-title=\"Local Channels\"";
+                print url;
+              }
+              in_extinf = 0;
+              extinf_line = "";
+              next;
+            }
+            { next; }
           ' local.m3u >> "$OUTPUT"
-
-          # Stats
-          TAMIL=$(awk '/group-title="Tamil"/ && /^#EXTINF/ {c++} END {print c+0}' "$OUTPUT")
-          LOCAL=$(awk '/group-title="Local Channels"/ && /^#EXTINF/ {c++} END {print c+0}' "$OUTPUT")
-          echo "✅ Built: $TAMIL Tamil (ordered), $LOCAL Local (A→Z)"
-          rm -rf "$TMP"
-
+          # 📊 Stats
+          TAMIL=$(grep -c '^#EXTINF:-1.*group-title="Tamil"' "$OUTPUT" 2>/dev/null || echo 0)
+          LOCAL=$(grep -c '^#EXTINF:-1.*group-title="Local Channels"' "$OUTPUT" 2>/dev/null || echo 0)
+          TOTAL=$((TAMIL + LOCAL))
+          echo "✅ main.m3u built with $TOTAL channels:"
+          echo "   🎯 Tamil (incl. Zee): $TAMIL"
+          echo "   🏠 Local Channels: $LOCAL"
+          # Optional: show first few Zee entries
+          echo ""
+          echo "📌 First 3 Zee-derived entries:"
+          awk '/# === zee\.m3u/,/# === local\.m3u/ { if (/^#EXTINF/ || /^http/) print "  " $0 }' "$OUTPUT" | head -n 6
       - name: Commit main.m3u
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add main.m3u
           if git diff --cached --quiet; then
-            echo "➡️ No changes"
+            echo "➡️ No changes — skipping commit"
             exit 0
           fi
-          T=$(awk '/group-title="Tamil"/ && /^#EXTINF/ {c++} END {print c+0}' main.m3u)
-          L=$(awk '/group-title="Local Channels"/ && /^#EXTINF/ {c++} END {print c+0}' main.m3u)
-          git commit -m "📺 main.m3u: $T Tamil (#1–#${T}) + $L Local (A→Z)"
+          git commit -m "📺 main.m3u: $TAMIL Tamil (incl. Zee w/ logos) + $LOCAL Local"
           git push origin main
