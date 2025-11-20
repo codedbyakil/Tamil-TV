@@ -158,9 +158,9 @@ https://jiotvpllive.cdn.jio.com/bpk-tv/Discovery_Channel_Tamil_BTS/output/index.
 https://jiotvpllive.cdn.jio.com/bpk-tv/History_HD_BTS/output/index.mpd
 
 # === zee.m3u → Tamil group ===
-#EXTINF:\1group-title="Tamil" tvg-logo="https://dvdh7g0f0hwck.cloudfront.net/assets/images/channel/ZeeThiraiHD_Transparent_148bf888-7a23-42a7-b5b9-fcd69a285a2f.png",Zee Thirai
+#EXTINF:-1group-title="Tamil" tvg-logo="https://dvdh7g0f0hwck.cloudfront.net/assets/images/channel/ZeeThiraiHD_Transparent_148bf888-7a23-42a7-b5b9-fcd69a285a2f.png",Zee Thirai
 http://webhop.live/live/juno123/juno123/181966.ts
-#EXTINF:\1group-title="Tamil" tvg-logo="https://dvdh7g0f0hwck.cloudfront.net/assets/images/channel/ZeeTamilHD_Transparent_a5bfaeec-a389-4264-93d9-902a446ef336.png",Zee Tamil
+#EXTINF:-1group-title="Tamil" tvg-logo="https://dvdh7g0f0hwck.cloudfront.net/assets/images/channel/ZeeTamilHD_Transparent_a5bfaeec-a389-4264-93d9-902a446ef336.png",Zee Tamil
 http://webhop.live/live/juno123/juno123/98897.ts
 
 # === local.m3u → Local Channels ===
