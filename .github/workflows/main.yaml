@@ -36,10 +36,6 @@ jobs:
             exit 1
           fi
 
-          # ✅ Create output directory
-          mkdir -p M3U
-
-          # ✅ Write to M3U/tamil.m3u instead of root
           echo "#EXTM3U" > M3U/tamil.m3u
 
           # ✅ YOUR FINAL 31 CHANNELS — exact names, case-insensitive match
@@ -56,6 +52,7 @@ jobs:
               else []
               end;
 
+            # Your 31 exact channel names
             [
               "Sun TV HD",
               "Sun Music HD",
@@ -90,10 +87,12 @@ jobs:
 
             channels as $all |
             $list[] as $target |
+            # Find FIRST channel whose name (case-insensitive) matches $target EXACTLY
             ($all | map(select(
               (.name // .title // "") | ascii_downcase == ($target | ascii_downcase)
             )) | .[0]) as $match |
 
+            # Only output if match exists AND has link
             if ($match | type == "object") and ($match.link // $match.url // "") != "" then
               $match |
               (.name // .title // $target) as $name |
@@ -130,14 +129,14 @@ jobs:
                 $link
               ] | join("\n")
             else empty end
-          ' >> M3U/tamil.m3u
+          ' >> m3u/tamil.m3u
 
-          # Final report — read from M3U/tamil.m3u
-          TOTAL=$(grep -c "^#EXTINF" M3U/tamil.m3u || echo 0)
-          echo "✅ M3U/tamil.m3u created: $TOTAL / 31 channels found"
+          # Final report
+          TOTAL=$(grep -c "^#EXTINF" tamil.m3u || echo 0)
+          echo "✅ tamil.m3u created: $TOTAL / 31 channels found"
           if [ "$TOTAL" -gt 0 ]; then
             echo "📋 Channels included:"
-            grep "^#EXTINF" M3U/tamil.m3u | sed 's/.*,//'
+            grep "^#EXTINF" m3u/tamil.m3u | sed 's/.*,//'
           else
             echo "❌ None of the 31 channels were found in Ziotv.json"
             echo "🔍 Top 20 channel names in JSON:"
@@ -149,9 +148,7 @@ jobs:
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
-
-          # ✅ Stage M3U/tamil.m3u (not root)
-          git add M3U/tamil.m3u
+          git add tamil.m3u
 
           if git diff --cached --quiet; then
             echo "➡️ No changes — skipping commit"
