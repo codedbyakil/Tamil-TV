@@ -24,20 +24,17 @@ jobs:
       - name: Generate tamil.m3u
         run: |
           echo "📥 Fetching Ziotv.json..."
-          JSON_URL="https://playify.pages.dev/Jiotv.json "
+          JSON_URL="https://playify.pages.dev/Jiotv.json"
           JSON=$(curl -sf \
             -H "User-Agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36" \
             -H "Accept: application/json" \
-            -H "Referer: https://playify.pages.dev/ " \
+            -H "Referer: https://playify.pages.dev/" \
             "$JSON_URL") || { echo "❌ Failed to fetch JSON"; exit 1; }
-
           if [ -z "$JSON" ] || [ "${JSON:0:1}" = "<" ]; then
             echo "❌ Response is empty or HTML"
             exit 1
           fi
-
           echo "#EXTM3U" > tamil.m3u
-
           # ✅ YOUR FINAL 31 CHANNELS — exact names, case-insensitive match
           echo "$JSON" | jq -r '
             def channels:
@@ -51,7 +48,6 @@ jobs:
                 end
               else []
               end;
-
             # Your 31 exact channel names
             [
               "Sun TV HD",
@@ -84,14 +80,12 @@ jobs:
               "D Tamil",
               "History HD"
             ] as $list |
-
             channels as $all |
             $list[] as $target |
             # Find FIRST channel whose name (case-insensitive) matches $target EXACTLY
             ($all | map(select(
               (.name // .title // "") | ascii_downcase == ($target | ascii_downcase)
             )) | .[0]) as $match |
-
             # Only output if match exists AND has link
             if ($match | type == "object") and ($match.link // $match.url // "") != "" then
               $match |
@@ -102,25 +96,20 @@ jobs:
               (.drmLicense // .license // "") as $drmLicense |
               (.cookie // .cookies // "") as $cookie |
               (.link // .url // .stream_url // .hls // .mpd // "") as $link |
-
               "#EXTINF:-1 " +
                 (if ($tvg_id | length > 0) then "tvg-id=\"\($tvg_id)\" " else "" end) +
                 "group-title=\"Tamil\" " +
                 (if ($tvg_logo | length > 0) then "tvg-logo=\"\($tvg_logo)\" " else "" end) +
                 ",\($name | gsub(","; "\\,"))" |
               . as $extinf |
-
               (if ($drmScheme == "clearkey") and ($drmLicense | test("^[a-zA-Z0-9]+:[a-zA-Z0-9]+")) then
                 "#KODIPROP:inputstream.adaptive.license_type=clearkey\n#KODIPROP:inputstream.adaptive.license_key=" + 
                 ($drmLicense | split(":")[0:2] | join(":"))
               else "" end) as $drm |
-
               "#EXTVLCOPT:http-user-agent=plaYtv/7.1.5%20(Linux%3BAndroid%2015)%20ExoPlayerLib/2.11.6%20YGX/69.69.69.69" as $ua |
-
               (if ($cookie | length > 0) then
                 "#EXTHTTP:{\"cookie\":\"" + ($cookie | gsub("\""; "\\\"")) + "\"}"
               else "" end) as $cookie_line |
-
               [
                 $extinf,
                 ($drm | select(. != "")),
@@ -130,7 +119,6 @@ jobs:
               ] | join("\n")
             else empty end
           ' >> tamil.m3u
-
           # Final report
           TOTAL=$(grep -c "^#EXTINF" tamil.m3u || echo 0)
           echo "✅ tamil.m3u created: $TOTAL / 31 channels found"
@@ -143,17 +131,14 @@ jobs:
             echo "$JSON" | jq -r 'channels | .[0:20][] | .name // .title // "–"' 2>/dev/null
             exit 1
           fi
-
       - name: Commit & Push
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add tamil.m3u
-
           if git diff --cached --quiet; then
             echo "➡️ No changes — skipping commit"
             exit 0
           fi
-
           git commit -m "✅ Auto-update Tamil M3U: $TOTAL/31 channels | $(date -u '+%Y-%m-%d %H:%M')"
           git push origin main
