@@ -132,7 +132,7 @@ jobs:
           ' >> m3u/tamil.m3u
 
           # Final report
-          TOTAL=$(grep -c "^#EXTINF" tamil.m3u || echo 0)
+          TOTAL=$(grep -c "^#EXTINF" m3u/tamil.m3u || echo 0)
           echo "✅ tamil.m3u created: $TOTAL / 31 channels found"
           if [ "$TOTAL" -gt 0 ]; then
             echo "📋 Channels included:"
