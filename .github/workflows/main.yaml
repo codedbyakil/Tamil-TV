@@ -36,7 +36,7 @@ jobs:
             exit 1
           fi
 
-          echo "#EXTM3U" > M3U/tamil.m3u
+          echo "#EXTM3U" > tamil.m3u
 
           # ✅ YOUR FINAL 31 CHANNELS — exact names, case-insensitive match
           echo "$JSON" | jq -r '
@@ -129,20 +129,19 @@ jobs:
                 $link
               ] | join("\n")
             else empty end
-          ' >> m3u/tamil.m3u
+          ' >> tamil.m3u
 
           # Final report
-          TOTAL=$(grep -c "^#EXTINF" m3u/tamil.m3u || echo 0)
+          TOTAL=$(grep -c "^#EXTINF" tamil.m3u || echo 0)
           echo "✅ tamil.m3u created: $TOTAL / 31 channels found"
-                    if [ "$TOTAL" -gt 0 ]; then
-            echo "✅ Found $TOTAL / 31 channels"
+          if [ "$TOTAL" -gt 0 ]; then
             echo "📋 Channels included:"
-            grep "^#EXTINF" m3u/tamil.m3u | sed 's/.*,//'
+            grep "^#EXTINF" tamil.m3u | sed 's/.*,//'
           else
-            echo "⚠️ 0 / 31 channels matched — possibly channel name mismatch or JSON structure changed"
-            echo "🔍 First 10 channel names in current JSON:"
-            echo "$JSON" | jq -r 'channels | .[0:10][] | .name // .title // "–"' 2>/dev/null
-            # ✅ Do NOT exit 1 — allow workflow to succeed
+            echo "❌ None of the 31 channels were found in Ziotv.json"
+            echo "🔍 Top 20 channel names in JSON:"
+            echo "$JSON" | jq -r 'channels | .[0:20][] | .name // .title // "–"' 2>/dev/null
+            exit 1
           fi
 
       - name: Commit & Push
