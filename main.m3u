@@ -182,20 +182,6 @@ https://webhop.live:443/live/juno123/juno123/160589.ts
 https://webhop.live:443/live/juno123/juno123/380978.ts
 
 # === local.m3u → Local Channels (logos preserved) ===
-#EXTINF:-1 tvg-name="Rasi TV" tvg-logo="https://raw.githubusercontent.com/codedbyakil/Rasi-TV-Network-IPTV/refs/heads/main/Logos/rasi_tv.png" group-title="Local Channels",Rasi TV
-http://rasinetworks.in:1935/rasitvhd/rasitvhd.stream_aac/playlist.m3u8
-#EXTINF:-1 tvg-name="Rasi Tamil" tvg-logo="https://raw.githubusercontent.com/codedbyakil/Rasi-TV-Network-IPTV/refs/heads/main/Logos/rasi_tamil.png" group-title="Local Channels",Rasi Tamil
-http://rasinetworks.in:1935/rasitamil/rasitamil.stream_aac/index.m3u8
-#EXTINF:-1 tvg-name="Rasi Movies" tvg-logo="https://raw.githubusercontent.com/codedbyakil/Rasi-TV-Network-IPTV/refs/heads/main/Logos/rasi_movies.png" group-title="Local Channels",Rasi Movies
-http://rasinetworks.in:1935/rasimovies/rasimovies.stream_aac/index.m3u8
-#EXTINF:-1 tvg-name="Rasi Music" tvg-logo="https://raw.githubusercontent.com/codedbyakil/Rasi-TV-Network-IPTV/refs/heads/main/Logos/rasi_music.png" group-title="Local Channels",Rasi Music
-http://rasinetworks.in:1935/rasimusic/rasimusic.stream_aac/index.m3u8
-#EXTINF:-1 tvg-name="Rasi Hollywood" tvg-logo="https://raw.githubusercontent.com/codedbyakil/Rasi-TV-Network-IPTV/refs/heads/main/Logos/rasi_hollywood.png" group-title="Local Channels",Rasi Hollywood
-http://rasinetworks.in:1935/rasihollywood/rasihollywood.stream_aac/index.m3u8
-#EXTINF:-1 tvg-name="Rasi Classic" tvg-logo="https://raw.githubusercontent.com/codedbyakil/Rasi-TV-Network-IPTV/refs/heads/main/Logos/rasi_classic.png" group-title="Local Channels",Rasi Classic
-http://rasinetworks.in:1935/rasiclassic/rasiclassic.stream_aac/index.m3u8
-#EXTINF:-1 tvg-name="Rasi Comedy" tvg-logo="https://raw.githubusercontent.com/codedbyakil/Rasi-TV-Network-IPTV/refs/heads/main/Logos/rasi_comedy.png" group-title="Local Channels",Rasi Comedy
-http://rasinetworks.in:1935/rasicomedy/rasicomedy.stream_aac/index.m3u8
 #EXTINF: -1  tvg-name="Shalini Tv"  tvg-logo="https://tataprime.files.wordpress.com/2024/03/20240301_2245168831702386818332917.png" group-title="Local Channels",Shalini Tv
 https://stream.singamcloud.in/shalinitv/shalinitv/index.m3u8
 #EXTINF:-1 tvg-id="" tvg-name="" tvg-language="Tamil" tvg-logo="" tvg-country="IN" tvg-url="" group-title="Local Channels",CTN NXT TV
