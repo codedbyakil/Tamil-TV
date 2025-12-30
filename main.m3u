@@ -160,8 +160,12 @@ https://jiotvbpkmob.cdn.jio.com/bpk-tv/History_HD_BTS/output/index.mpd
 # === zee.m3u → Tamil (logos preserved) ===
 #EXTINF:-1 tvg-logo="https://dvdh7g0f0hwck.cloudfront.net/assets/images/channel/ZeeThiraiHD_Transparent_148bf888-7a23-42a7-b5b9-fcd69a285a2f.png" group-title="Tamil",Zee Thirai
 http://starshare.cx/live/PeH5kPWFfG/infamous7funny/181966.ts
+#EXTINF:-1 tvg-logo="https://dvdh7g0f0hwck.cloudfront.net/assets/images/channel/ZeeThiraiHD_Transparent_148bf888-7a23-42a7-b5b9-fcd69a285a2f.png" group-title="Tamil",Zee Thirai 2
+http://geoiptv.one:8880/live/80877716/24893488/179336.ts
 #EXTINF:-1 tvg-logo="https://dvdh7g0f0hwck.cloudfront.net/assets/images/channel/ZeeTamilHD_Transparent_a5bfaeec-a389-4264-93d9-902a446ef336.png" group-title="Tamil",Zee Tamil
 http://tv.123tv.to:8080/live/EyfkbpuDV8/kVe41owCzs/2786.ts
+#EXTINF:-1 tvg-logo="https://dvdh7g0f0hwck.cloudfront.net/assets/images/channel/ZeeTamilHD_Transparent_a5bfaeec-a389-4264-93d9-902a446ef336.png" group-title="Tamil",Zee Tamil 2
+http://geoiptv.one:8880/live/80877716/24893488/324776.ts
 #EXTINF:-1 tvg-id="ts443" tvg-logo="https://i.postimg.cc/k5KdQRFN/image-Content-11734-j9kw60rc-m1.webp" group-title="Tamil", Sun News
 https://livestream3.sunnxt.com/491c99fb6d0c49e88e6349170d890a2f/SunNewsB_IN_index.mpd
 #EXTINF:-1 tvg-id="58" tvg-chno="193" tvg-logo="https://tatalogo.pages.dev/58.png" group-title="Tamil", News18 Tamil Nadu
