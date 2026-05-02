@@ -1,52 +1,70 @@
-name: Auto-Update Tamil M3U
-
-permissions:
-  contents: write
+name: Auto-Update Main M3U
 
 on:
   workflow_dispatch:
   schedule:
     - cron: '*/30 * * * *'
 
+permissions:
+  contents: write
+
 jobs:
-  update:
+  build-main:
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout main branch
         uses: actions/checkout@v4
 
-      - name: Install jq
-        run: sudo apt-get update && sudo apt-get install -y jq
+      - name: Install tools
+        run: sudo apt-get update && sudo apt-get install -y jq dos2unix
 
-      - name: Generate tamil.m3u
+      - name: Verify other.m3u exists
         run: |
-          echo "📥 Fetching JSON..."
+          FILE=".github/workflows/other.m3u"
+          [ -f "$FILE" ] || { echo "❌ other.m3u missing"; exit 1; }
+          sed -i '1s/^\xEF\xBB\xBF//' "$FILE"
+          dos2unix "$FILE" 2>/dev/null || sed -i 's/\r$//' "$FILE"
 
-          JSON_URL="https://noisy-truth-6766.streamstar18.workers.dev"
-          JSON=$(curl -sL "$JSON_URL") || { echo "❌ Fetch failed"; exit 1; }
+      - name: Download VOD
+        id: vod
+        run: |
+          curl -sfL "https://raw.githubusercontent.com/codedbyakil/VOD/refs/heads/main/vod.m3u" -o vod.m3u || exit 1
+          sed -i '1s/^\xEF\xBB\xBF//' vod.m3u
+          dos2unix vod.m3u 2>/dev/null || sed -i 's/\r$//' vod.m3u
+          echo "vod_count=$(grep -c '^#EXTINF:' vod.m3u || echo 0)" >> $GITHUB_OUTPUT
 
-          if [ -z "$JSON" ] || [ "${JSON:0:1}" = "<" ]; then
-            echo "❌ Invalid response"
-            exit 1
-          fi
+      - name: Build main.m3u
+        id: build
+        run: |
+          OUT="main.m3u"
+          OTHER=".github/workflows/other.m3u"
+          VOD="vod.m3u"
 
-          echo "#EXTM3U" > tamil.m3u
+          echo "#EXTM3U" > "$OUT"
+
+          JSON=$(curl -sL "https://noisy-truth-6766.streamstar18.workers.dev")
+          echo "$JSON" | jq empty || { echo "❌ Invalid JSON"; exit 1; }
+
+          echo "# === LIVE (AUTO GROUP OR FALLBACK) ===" >> "$OUT"
 
           echo "$JSON" | jq -r '
-            # -------- NORMALIZE --------
             def channels:
-              if type == "array" then .
-              elif type == "object" then
+              if type=="array" then .
+              elif type=="object" then
                 if has("channels") then .channels
                 elif has("data") then .data
                 elif has("list") then .list
                 else [.[]]
                 end
-              else []
-              end;
+              else [] end;
 
-            # -------- TARGET LIST --------
+            channels as $all |
+
+            # detect if group/category exists
+            (any($all[]; has("group") or has("category"))) as $hasGroup |
+
+            # fallback list
             [
               "Sun TV HD","Sun Music HD","Sun Life","Adithya TV","KTV HD",
               "Star Vijay HD","Vijay Super HD","Colors Tamil","Jaya TV HD",
@@ -57,88 +75,93 @@ jobs:
               "D Tamil","History HD"
             ] as $list |
 
-            channels as $all |
+            if $hasGroup then
+              # ✅ GROUP MODE
+              $all[]
+              | (.group // .category // "") as $grp
+              | select($grp | ascii_downcase | test("tamil|kids"))
 
-            $list[] as $target |
+            else
+              # ✅ FALLBACK MODE
+              $list[] as $target
+              | ($all | map(select(
+                  (.name // .title // "") | ascii_downcase == ($target | ascii_downcase)
+                )) | .[0])
 
-            # -------- MATCH CHANNEL --------
-            ($all | map(select(
-              (.name // .title // "") | ascii_downcase == ($target | ascii_downcase)
-            )) | .[0]) as $c |
+            end |
 
-            if ($c | type == "object") then
+            select(type=="object") |
 
-              # -------- FIELD EXTRACTION (DUAL FORMAT) --------
-              ($c.name // $c.title // $target) as $name |
-              ($c.id // $c.tvg_id // "") as $id |
-              ($c.logo // $c.tvg_logo // "") as $logo |
+            # -------- COMMON PARSING --------
+            (.name // .title // "Unknown") as $name |
+            (.id // .tvg_id // "") as $id |
+            (.logo // .tvg_logo // "") as $logo |
 
-              ($c.mpd_url // $c.link // $c.url // $c.stream_url // "") as $raw |
+            (.mpd_url // .link // .url // .stream_url // "") as $raw |
+            (.license_url // .drmLicense // "") as $license |
+            (.headers.cookie // .cookie // "") as $cookie |
+            (.drmScheme // .drm_scheme // .drm // "") as $drmScheme |
 
-              ($c.license_url // $c.drmLicense // "") as $license |
+            ($raw | split("|")) as $p |
+            ($p[0]) as $url |
+            ($p[1] // "") as $drmPart |
 
-              ($c.headers.cookie // $c.cookie // "") as $cookie |
+            (if ($drmPart | test("drmScheme="))
+              then ($drmPart | capture("drmScheme=(?<d>[^&]+)") | .d)
+              else $drmScheme end) as $scheme |
 
-              ($c.drmScheme // $c.drm_scheme // $c.drm // "") as $drmScheme |
+            select($url != "") |
 
-              # -------- SPLIT URL --------
-              ($raw | split("|")) as $p |
-              ($p[0]) as $url |
-              ($p[1] // "") as $drmPart |
+            "#EXTINF:-1 " +
+              (if ($id|length)>0 then "tvg-id=\"\($id)\" " else "" end) +
+              "group-title=\"" + ((.group // .category // "Live")) + "\" " +
+              (if ($logo|length)>0 then "tvg-logo=\"\($logo)\" " else "" end) +
+              ",\($name | gsub(","; "\\,"))",
 
-              # -------- SAFE DRM DETECTION --------
-              (if ($drmPart | test("drmScheme="))
-                then ($drmPart | capture("drmScheme=(?<d>[^&]+)") | .d)
-                else $drmScheme
-               end) as $scheme |
+            (if $scheme=="clearkey" and ($license|length)>0 then
+              "#KODIPROP:inputstream.adaptive.license_type=clearkey\n#KODIPROP:inputstream.adaptive.license_key=\($license)"
+            else empty end),
 
-              if ($url | length) > 0 then
+            "#EXTVLCOPT:http-user-agent=plaYtv/7.1.5",
 
-                "#EXTINF:-1 " +
-                  (if ($id|length)>0 then "tvg-id=\"\($id)\" " else "" end) +
-                  "group-title=\"Tamil\" " +
-                  (if ($logo|length)>0 then "tvg-logo=\"\($logo)\" " else "" end) +
-                  ",\($name | gsub(","; "\\,"))",
+            (if ($cookie|length)>0 then
+              "#EXTHTTP:{\"cookie\":\"\($cookie | gsub("\""; "\\\""))\"}"
+            else empty end),
 
-                # DRM support
-                (if $scheme == "clearkey" and ($license|length)>0 then
-                  "#KODIPROP:inputstreamaddon=inputstream.adaptive\n#KODIPROP:inputstream.adaptive.manifest_type=mpd\n#KODIPROP:inputstream.adaptive.license_type=clearkey\n#KODIPROP:inputstream.adaptive.license_key=\($license)"
-                else empty end),
+            $url,
+            ""
+          ' >> "$OUT"
 
-                "#EXTVLCOPT:http-user-agent=plaYtv/7.1.5",
+          # STATIC
+          echo "# === STATIC ===" >> "$OUT"
+          awk '!/^#EXTM3U/' "$OTHER" >> "$OUT"
 
-                (if ($cookie|length)>0 then
-                  "#EXTHTTP:{\"cookie\":\"\($cookie | gsub("\""; "\\\""))\"}"
-                else empty end),
+          # VOD
+          echo "# === VOD ===" >> "$OUT"
+          awk '
+            /^#EXTINF:/ {
+              if ($0 !~ /group-title=/)
+                sub("#EXTINF:-1", "#EXTINF:-1 group-title=\"VOD\"")
+            }
+            !/^#EXTM3U/
+          ' "$VOD" >> "$OUT"
 
-                $url,
-                ""
+          TOTAL=$(grep -c '^#EXTINF' "$OUT" || echo 0)
+          echo "total=$TOTAL" >> $GITHUB_OUTPUT
 
-              else empty end
+          echo "✅ Built main.m3u ($TOTAL entries)"
 
-            else empty end
-          ' >> tamil.m3u
-
-          TOTAL=$(grep -c "^#EXTINF" tamil.m3u || echo 0)
-
-          echo "✅ tamil.m3u created: $TOTAL / 31 channels found"
-
-          if [ "$TOTAL" -eq 0 ]; then
-            echo "❌ No matching channels found"
-            exit 1
-          fi
-
-      - name: Commit & Push
+      - name: Commit
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          git add tamil.m3u
+          git add main.m3u
 
           if git diff --cached --quiet; then
-            echo "➡️ No changes"
+            echo "No changes"
             exit 0
           fi
 
-          git commit -m "Auto-update Tamil M3U: $(date -u '+%Y-%m-%d %H:%M')"
-          git push origin main
+          git commit -m "Auto update main.m3u ($(date -u '+%Y-%m-%d %H:%M'))"
+          git push
